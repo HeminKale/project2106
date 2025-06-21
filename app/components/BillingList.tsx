@@ -18,6 +18,7 @@ type BillingRecord = {
   status: string;
   description: string | null;
   created_at: string;
+  invoice_number: string | null;
   client?: {
     name: string;
     email: string;
@@ -53,7 +54,8 @@ export default function BillingList() {
         .from('billing')
         .select(`
           *,
-          client:clients(name, email)
+          client:clients(name, email),
+          invoice_number
         `)
         .order('billing_date', { ascending: false });
 
@@ -294,6 +296,9 @@ export default function BillingList() {
                     Amount
                   </th>
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                    Invoice Number
+                  </th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                     Billing Date
                   </th>
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
@@ -305,8 +310,8 @@ export default function BillingList() {
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                     Description
                   </th>
-                  <th className="relative px-6 py-3">
-                    <span className="sr-only">Actions</span>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                    Created
                   </th>
                 </tr>
               </thead>
@@ -327,6 +332,18 @@ export default function BillingList() {
                       </div>
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap">
+                      {record.invoice_number ? (
+                        <Link
+                          href={`/billing/${record.id}`}
+                          className="text-blue-600 hover:text-blue-800"
+                        >
+                          {record.invoice_number}
+                        </Link>
+                      ) : (
+                        <span className="text-gray-500">N/A</span>
+                      )}
+                    </td>
+                    <td className="px-6 py-4 whitespace-nowrap">
                       <div className="text-sm text-gray-900">{formatDate(record.billing_date)}</div>
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap">
@@ -335,30 +352,15 @@ export default function BillingList() {
                       </div>
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap">
-                      <select
-                        value={record.status}
-                        onChange={(e) => handleStatusUpdate(record.id, e.target.value)}
-                        className="text-sm border border-gray-300 rounded-md px-2 py-1 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-white"
-                      >
-                        {statusOptions.map((option) => (
-                          <option key={option.value} value={option.value}>
-                            {option.label}
-                          </option>
-                        ))}
-                      </select>
+                      {getStatusBadge(record.status)}
                     </td>
                     <td className="px-6 py-4">
                       <div className="text-sm text-gray-900 max-w-xs truncate">
                         {record.description || 'No description'}
                       </div>
                     </td>
-                    <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
-                      <Link
-                        href={`/billing/${record.id}`}
-                        className="text-blue-600 hover:text-blue-900 transition-colors duration-150"
-                      >
-                        View
-                      </Link>
+                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                      {formatDate(record.created_at)}
                     </td>
                   </tr>
                 ))}

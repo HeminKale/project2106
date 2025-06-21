@@ -7,12 +7,16 @@ interface AuthContextType {
   user: AuthUser | null;
   loading: boolean;
   refreshUser: () => Promise<void>;
+  impersonatedUserName: string | null;
+  setImpersonatedUserName: (name: string | null) => void;
 }
 
 const AuthContext = createContext<AuthContextType>({
   user: null,
   loading: true,
   refreshUser: async () => {},
+  impersonatedUserName: null,
+  setImpersonatedUserName: () => {},
 });
 
 export const useAuth = () => {
@@ -30,6 +34,12 @@ interface AuthProviderProps {
 export default function AuthProvider({ children }: AuthProviderProps) {
   const [user, setUser] = useState<AuthUser | null>(null);
   const [loading, setLoading] = useState(true);
+  const [impersonatedUserName, setImpersonatedUserName] = useState<string | null>(() => {
+    if (typeof window !== 'undefined') {
+      return localStorage.getItem('impersonatedUserName');
+    }
+    return null;
+  });
 
   const refreshUser = async () => {
     try {
@@ -44,11 +54,21 @@ export default function AuthProvider({ children }: AuthProviderProps) {
   };
 
   useEffect(() => {
+    if (typeof window !== 'undefined') {
+      if (impersonatedUserName) {
+        localStorage.setItem('impersonatedUserName', impersonatedUserName);
+      } else {
+        localStorage.removeItem('impersonatedUserName');
+      }
+    }
+  }, [impersonatedUserName]);
+
+  useEffect(() => {
     refreshUser();
   }, []);
 
   return (
-    <AuthContext.Provider value={{ user, loading, refreshUser }}>
+    <AuthContext.Provider value={{ user, loading, refreshUser, impersonatedUserName, setImpersonatedUserName }}>
       {children}
     </AuthContext.Provider>
   );

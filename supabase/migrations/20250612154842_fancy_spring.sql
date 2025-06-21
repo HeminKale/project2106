@@ -37,6 +37,7 @@ BEGIN
     AND t.table_type = 'BASE TABLE'
     AND t.table_name NOT LIKE 'pg_%'
     AND t.table_name NOT LIKE 'sql_%'
+    AND t.table_name <> 'object_manager' -- Exclude the object_manager table
   ORDER BY t.table_name;
 END;
 $$ LANGUAGE plpgsql SECURITY DEFINER;

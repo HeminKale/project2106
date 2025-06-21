@@ -44,6 +44,25 @@ type BillingRecord = {
   };
 };
 
+interface FieldMetadata {
+  id: string;
+  table_name: string;
+  api_name: string;
+  display_label: string;
+  field_type: string;
+  is_required: boolean;
+  is_nullable: boolean;
+  default_value: string | null;
+  validation_rules: any[];
+  display_order: number;
+  section: string;
+  width: 'half' | 'full';
+  is_visible: boolean;
+  is_system_field: boolean;
+  reference_table: string | null;
+  reference_display_field: string | null;
+}
+
 const statusOptions = [
   { value: 'pending', label: 'Pending', color: 'bg-yellow-100 text-yellow-800' },
   { value: 'paid', label: 'Paid', color: 'bg-green-100 text-green-800' },
@@ -60,10 +79,12 @@ export default function BillingDetailPage() {
   const [isEditing, setIsEditing] = useState(false);
   const [saving, setSaving] = useState(false);
   const [editedBilling, setEditedBilling] = useState<BillingRecord | null>(null);
+  const [fieldMetadata, setFieldMetadata] = useState<FieldMetadata[]>([]);
 
   useEffect(() => {
     if (params.id && user) {
       fetchBilling(params.id as string);
+      fetchFieldMetadata();
     }
   }, [params.id, user]);
 
@@ -72,6 +93,50 @@ export default function BillingDetailPage() {
       setEditedBilling({ ...billing });
     }
   }, [billing]);
+
+  const fetchFieldMetadata = async () => {
+    try {
+      console.log('🔍 Fetching field metadata for billing table');
+      const { data, error } = await supabase
+        .from('field_metadata')
+        .select('*')
+        .eq('table_name', 'billing')
+        .order('display_order');
+
+      if (error) {
+        console.error('❌ Error fetching field metadata:', error);
+      } else {
+        console.log('✅ Fetched field metadata:', data);
+        if (!data || data.length === 0) {
+          console.log('No field metadata found, syncing...');
+          await syncFieldMetadata();
+        } else {
+          setFieldMetadata(data);
+        }
+      }
+    } catch (err) {
+      console.error('Unexpected error fetching field metadata:', err);
+    }
+  };
+
+  const syncFieldMetadata = async () => {
+    try {
+      console.log('🔄 Syncing field metadata for billing table');
+      const { data, error } = await supabase.rpc('sync_table_metadata', {
+        table_name_param: 'billing'
+      });
+
+      if (error) {
+        console.error('❌ Error syncing field metadata:', error);
+      } else {
+        console.log('✅ Field metadata synced:', data);
+        // Fetch the metadata again after syncing
+        fetchFieldMetadata();
+      }
+    } catch (err) {
+      console.error('Unexpected error syncing field metadata:', err);
+    }
+  };
 
   const fetchBilling = async (id: string) => {
     try {
@@ -193,6 +258,138 @@ export default function BillingDetailPage() {
     );
   };
 
+  // Add helper function to get fields for a section
+  const getFieldsForSection = (section: string) => {
+    const fields = fieldMetadata
+      .filter(field => field.section === section && field.is_visible)
+      .sort((a, b) => a.display_order - b.display_order);
+    console.log(`Fields for section ${section}:`, fields);
+    return fields;
+  };
+
+  // Add helper function to render field value
+  const renderFieldValue = (field: FieldMetadata, value: any) => {
+    if (value === null || value === undefined) return 'N/A';
+
+    switch (field.field_type) {
+      case 'date':
+      case 'timestamptz':
+        return formatDate(value);
+      case 'boolean':
+        return value ? 'Yes' : 'No';
+      case 'reference':
+        if (field.api_name === 'client_id' && billing?.client) {
+          return billing.client.name;
+        }
+        return value;
+      case 'number':
+      case 'integer':
+      case 'decimal':
+        return formatCurrency(value);
+      default:
+        return value;
+    }
+  };
+
+  // Add helper function to render field input
+  const renderFieldInput = (field: FieldMetadata, value: any) => {
+    const handleChange = (newValue: any) => {
+      if (editedBilling) {
+        setEditedBilling({ ...editedBilling, [field.api_name]: newValue } as BillingRecord);
+      }
+    };
+
+    switch (field.field_type) {
+      case 'date':
+      case 'timestamptz':
+        return (
+          <input
+            type="date"
+            value={value ? value.substring(0, 10) : ''}
+            onChange={(e) => handleChange(e.target.value)}
+            className="mt-1 block w-full border border-gray-300 rounded-md shadow-sm py-2 px-3 focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm"
+          />
+        );
+      case 'boolean':
+        return (
+          <select
+            value={value ? 'true' : 'false'}
+            onChange={(e) => handleChange(e.target.value === 'true')}
+            className="mt-1 block w-full border border-gray-300 rounded-md shadow-sm py-2 px-3 focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm"
+          >
+            <option value="true">Yes</option>
+            <option value="false">No</option>
+          </select>
+        );
+      case 'reference':
+        if (field.api_name === 'client_id') {
+          // In a real app, this would be a client search/dropdown
+          return (
+            <input
+              type="text"
+              value={value || ''}
+              onChange={(e) => handleChange(e.target.value)}
+              className="mt-1 block w-full border border-gray-300 rounded-md shadow-sm py-2 px-3 focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm"
+              disabled // Disabling for now, as it needs proper client search/selection
+            />
+          );
+        }
+        return (
+          <input
+            type="text"
+            value={value || ''}
+            onChange={(e) => handleChange(e.target.value)}
+            className="mt-1 block w-full border border-gray-300 rounded-md shadow-sm py-2 px-3 focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm"
+          />
+        );
+      case 'number':
+      case 'integer':
+      case 'decimal':
+        return (
+          <input
+            type="number"
+            value={value || ''}
+            onChange={(e) => handleChange(e.target.value)}
+            className="mt-1 block w-full border border-gray-300 rounded-md shadow-sm py-2 px-3 focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm"
+          />
+        );
+      case 'text':
+      case 'varchar':
+        if (field.api_name === 'status') {
+          return (
+            <select
+              value={value || ''}
+              onChange={(e) => handleChange(e.target.value)}
+              className="mt-1 block w-full border border-gray-300 rounded-md shadow-sm py-2 px-3 focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm bg-white"
+            >
+              {statusOptions.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+          );
+        }
+        return (
+          <input
+            type="text"
+            value={value || ''}
+            onChange={(e) => handleChange(e.target.value)}
+            className="mt-1 block w-full border border-gray-300 rounded-md shadow-sm py-2 px-3 focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm"
+          />
+        );
+      default:
+        return (
+          <input
+            type="text"
+            value={value || ''}
+            onChange={(e) => handleChange(e.target.value)}
+            className="mt-1 block w-full border border-gray-300 rounded-md shadow-sm py-2 px-3 focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm"
+          />
+        );
+    }
+  };
+
   if (authLoading) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-gray-50">
@@ -230,7 +427,7 @@ export default function BillingDetailPage() {
               <div className="ml-3">
                 <h3 className="text-sm font-medium text-red-800">Billing record not found</h3>
                 <p className="mt-1 text-sm text-red-700">{error || 'The requested billing record could not be found.'}</p>
-                <Link 
+                <Link
                   href="/billing"
                   className="mt-2 text-sm text-red-600 hover:text-red-500 underline"
                 >
@@ -248,14 +445,14 @@ export default function BillingDetailPage() {
     <Layout>
       <div className="max-w-4xl mx-auto">
         <div className="mb-6">
-          <Link 
-            href="/billing" 
+          <Link
+            href="/billing"
             className="text-blue-600 hover:text-blue-800 flex items-center gap-2 mb-4"
           >
             <svg className="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
             </svg>
-            Back to Billing
+            Back to Billing Records
           </Link>
         </div>
 
@@ -264,210 +461,91 @@ export default function BillingDetailPage() {
           <div className="px-6 py-4 border-b border-gray-200">
             <div className="flex items-center justify-between">
               <div>
-                <h1 className="text-2xl font-bold text-gray-900">Billing Record</h1>
-                <p className="text-gray-600">{formatCurrency(billing.amount)}</p>
-                {billing.client && (
-                  <p className="text-sm text-blue-600">
-                    Client: {billing.client.name} ({billing.client.email})
-                  </p>
-                )}
-                <div className="mt-2">
-                  {getStatusBadge(billing.status)}
-                </div>
-                {/* User tracking info */}
-                <div className="mt-2 text-xs text-gray-500 space-y-1">
-                  {billing.creator && (
-                    <div>Created by: {billing.creator.full_name} ({billing.creator.email})</div>
-                  )}
-                  {billing.updater && (
-                    <div>Last updated by: {billing.updater.full_name} ({billing.updater.email})</div>
-                  )}
-                </div>
+                <h1 className="text-2xl font-bold text-gray-900">Billing Record for {billing.client?.name || 'N/A'}</h1>
+                <p className="text-gray-600">Amount: {formatCurrency(billing.amount)}</p>
+                <p className="text-sm text-gray-600">Status: {getStatusBadge(billing.status)}</p>
               </div>
-              
-              {/* Edit/Save/Cancel Buttons */}
-              {user.user?.role !== 'viewer' && (
-                <>
-                  {!isEditing ? (
-                    <button 
-                      onClick={() => setIsEditing(true)}
-                      className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-medium transition-colors duration-200 flex items-center gap-2"
+              <div className="flex space-x-2">
+                {!isEditing ? (
+                  <button
+                    onClick={() => setIsEditing(true)}
+                    className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2"
+                  >
+                    Edit Billing
+                  </button>
+                ) : (
+                  <>
+                    <button
+                      onClick={handleSave}
                       disabled={saving}
+                      className="px-4 py-2 bg-green-600 text-white rounded-md hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-green-500 focus:ring-offset-2 disabled:opacity-50"
                     >
-                      <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
-                      </svg>
-                      Edit
+                      {saving ? 'Saving...' : 'Save Changes'}
                     </button>
-                  ) : (
-                    <div className="flex gap-2">
-                      <button 
-                        onClick={handleSave}
-                        className="px-4 py-2 bg-green-600 hover:bg-green-700 text-white rounded-lg font-medium transition-colors duration-200 flex items-center gap-2"
-                        disabled={saving}
-                      >
-                        {saving ? (
-                          <>
-                            <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white"></div>
-                            Saving...
-                          </>
-                        ) : (
-                          <>
-                            <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
-                            </svg>
-                            Save
-                          </>
-                        )}
-                      </button>
-                      <button 
-                        onClick={handleCancel}
-                        className="px-4 py-2 bg-gray-600 hover:bg-gray-700 text-white rounded-lg font-medium transition-colors duration-200 flex items-center gap-2"
-                        disabled={saving}
-                      >
-                        <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                        </svg>
-                        Cancel
-                      </button>
-                    </div>
-                  )}
-                </>
-              )}
+                    <button
+                      onClick={handleCancel}
+                      disabled={saving}
+                      className="px-4 py-2 bg-gray-300 text-gray-800 rounded-md hover:bg-gray-400 focus:outline-none focus:ring-2 focus:ring-gray-400 focus:ring-offset-2 disabled:opacity-50"
+                    >
+                      Cancel
+                    </button>
+                  </>
+                )}
+              </div>
             </div>
           </div>
-        </div>
 
-        {/* Billing Details */}
-        <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
-          <h3 className="text-lg font-semibold text-gray-900 mb-6">Billing Information</h3>
-          
-          <div className="space-y-6">
-            {/* Basic Information */}
-            <div className="space-y-4">
-              <h4 className="text-md font-medium text-gray-900">Basic Details</h4>
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-sm font-medium text-gray-500 mb-1">Amount (USD)</label>
-                  {isEditing ? (
-                    <input
-                      type="number"
-                      step="0.01"
-                      value={editedBilling.amount}
-                      onChange={(e) => setEditedBilling({ ...editedBilling, amount: parseFloat(e.target.value) || 0 })}
-                      className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                    />
-                  ) : (
-                    <p className="text-sm text-gray-900 py-2">{formatCurrency(billing.amount)}</p>
-                  )}
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-500 mb-1">Status</label>
-                  {isEditing ? (
-                    <select
-                      value={editedBilling.status}
-                      onChange={(e) => setEditedBilling({ ...editedBilling, status: e.target.value })}
-                      className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-white"
-                    >
-                      {statusOptions.map((option) => (
-                        <option key={option.value} value={option.value}>
-                          {option.label}
-                        </option>
+          <div className="p-6">
+            <h2 className="text-lg font-bold text-gray-900 mb-4">Billing Details</h2>
+
+            {/* Dynamic Sections */}
+            {(() => {
+              const uniqueSections = Array.from(new Set(fieldMetadata.map(f => f.section)));
+              const predefinedOrder = ['basic', 'details', 'system'];
+
+              const sortedSections = uniqueSections.sort((a, b) => {
+                const indexA = predefinedOrder.indexOf(a);
+                const indexB = predefinedOrder.indexOf(b);
+
+                if (indexA === -1 && indexB === -1) {
+                  return a.localeCompare(b); // Both are custom, sort alphabetically
+                }
+                if (indexA === -1) {
+                  return 1; // a is custom, b is predefined, b comes first
+                }
+                if (indexB === -1) {
+                  return -1; // a is predefined, b is custom, a comes first
+                }
+                return indexA - indexB; // Sort by predefined order
+              });
+
+              return sortedSections.map(section => {
+                const fields = getFieldsForSection(section);
+                if (fields.length === 0) return null;
+
+                return (
+                  <div key={section} className="space-y-4 mb-6">
+                    <h2 className="text-lg font-bold text-gray-900">
+                      {section.charAt(0).toUpperCase() + section.slice(1)}
+                    </h2>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-x-6 gap-y-4">
+                      {fields.map(field => (
+                        <div key={field.id} className={field.width === 'full' ? 'col-span-2' : ''}>
+                          <p className="text-sm font-medium text-gray-500">{field.display_label}</p>
+                          {!isEditing ? (
+                            <p className="mt-1 text-sm text-gray-900">
+                              {renderFieldValue(field, billing[field.api_name as keyof BillingRecord])}
+                            </p>
+                          ) : (
+                            renderFieldInput(field, editedBilling?.[field.api_name as keyof BillingRecord])
+                          )}
+                        </div>
                       ))}
-                    </select>
-                  ) : (
-                    <div className="py-2">
-                      {getStatusBadge(billing.status)}
                     </div>
-                  )}
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-500 mb-1">Billing Date</label>
-                  {isEditing ? (
-                    <input
-                      type="date"
-                      value={editedBilling.billing_date}
-                      onChange={(e) => setEditedBilling({ ...editedBilling, billing_date: e.target.value })}
-                      className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                    />
-                  ) : (
-                    <p className="text-sm text-gray-900 py-2">{formatSimpleDate(billing.billing_date)}</p>
-                  )}
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-500 mb-1">Due Date</label>
-                  {isEditing ? (
-                    <input
-                      type="date"
-                      value={editedBilling.due_date || ''}
-                      onChange={(e) => setEditedBilling({ ...editedBilling, due_date: e.target.value || null })}
-                      className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                    />
-                  ) : (
-                    <p className="text-sm text-gray-900 py-2">{formatSimpleDate(billing.due_date)}</p>
-                  )}
-                </div>
-              </div>
-            </div>
-
-            {/* Client Information */}
-            <div className="space-y-4">
-              <h4 className="text-md font-medium text-gray-900">Client Information</h4>
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-sm font-medium text-gray-500 mb-1">Client Name</label>
-                  <p className="text-sm text-gray-900 py-2">{billing.client?.name || 'Unknown Client'}</p>
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-500 mb-1">Client Email</label>
-                  <p className="text-sm text-gray-900 py-2">{billing.client?.email || 'No email'}</p>
-                </div>
-              </div>
-              {billing.client && (
-                <div className="mt-2">
-                  <Link
-                    href={`/clients/${billing.client.id}`}
-                    className="text-blue-600 hover:text-blue-800 text-sm font-medium"
-                  >
-                    View Client Details →
-                  </Link>
-                </div>
-              )}
-            </div>
-
-            {/* Description */}
-            <div className="space-y-4">
-              <h4 className="text-md font-medium text-gray-900">Description</h4>
-              <div>
-                <label className="block text-sm font-medium text-gray-500 mb-1">Notes</label>
-                {isEditing ? (
-                  <textarea
-                    value={editedBilling.description || ''}
-                    onChange={(e) => setEditedBilling({ ...editedBilling, description: e.target.value || null })}
-                    rows={3}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                    placeholder="Enter billing description..."
-                  />
-                ) : (
-                  <p className="text-sm text-gray-900 py-2">{billing.description || 'No description provided'}</p>
-                )}
-              </div>
-            </div>
-
-            {/* Timestamps */}
-            <div className="space-y-4">
-              <h4 className="text-md font-medium text-gray-900">Timeline</h4>
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-sm font-medium text-gray-500 mb-1">Created</label>
-                  <p className="text-sm text-gray-900 py-2">{formatDate(billing.created_at)}</p>
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-500 mb-1">Last Updated</label>
-                  <p className="text-sm text-gray-900 py-2">{formatDate(billing.updated_at)}</p>
-                </div>
-              </div>
-            </div>
+                  </div>
+                );
+              });
+            })()}
           </div>
         </div>
       </div>

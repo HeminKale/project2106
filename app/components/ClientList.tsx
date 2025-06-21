@@ -125,20 +125,6 @@ export default function ClientList() {
     );
   };
 
-  const getLegacyStatusBadge = (status: boolean, trueText: string, falseText: string) => {
-    return (
-      <span className={`
-        inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium
-        ${status 
-          ? 'bg-green-100 text-green-800' 
-          : 'bg-gray-100 text-gray-800'
-        }
-      `}>
-        {status ? trueText : falseText}
-      </span>
-    );
-  };
-
   if (loading) {
     return (
       <div className="flex items-center justify-center h-64">
@@ -253,9 +239,6 @@ export default function ClientList() {
                     Certification
                   </th>
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    Legacy Status
-                  </th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                     Created
                   </th>
                   <th className="relative px-6 py-3">
@@ -279,7 +262,6 @@ export default function ClientList() {
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap">
                       <div className="text-sm text-gray-900">
-                        #{client.channel_partner_id}
                         {client.channel_partner && (
                           <div className="text-xs text-gray-500">
                             {client.channel_partner.name} ({client.channel_partner.country})
@@ -301,22 +283,10 @@ export default function ClientList() {
                         </div>
                       </div>
                     </td>
-                    <td className="px-6 py-4 whitespace-nowrap">
-                      <div className="flex flex-col gap-1">
-                        {getLegacyStatusBadge(client.draft_uploaded, 'Draft Uploaded', 'No Draft')}
-                        {getLegacyStatusBadge(client.certificate_sent, 'Certificate Sent', 'Pending')}
-                      </div>
-                    </td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
                       {formatDate(client.created_at)}
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
-                      <Link
-                        href={`/clients/${client.id}`}
-                        className="text-blue-600 hover:text-blue-900 transition-colors duration-150"
-                      >
-                        View
-                      </Link>
                     </td>
                   </tr>
                 ))}

@@ -8,6 +8,7 @@ import Layout from '../../components/Layout';
 import ChannelPartnerBillingManager from '../../components/ChannelPartnerBillingManager';
 import LoginForm from '../../components/LoginForm';
 import Link from 'next/link';
+import ChannelPartnerClientsList from '../../components/ChannelPartnerClientsList';
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
 const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '';
@@ -39,8 +40,28 @@ type ChannelPartner = {
   };
 };
 
+interface FieldMetadata {
+  id: string;
+  table_name: string;
+  api_name: string;
+  display_label: string;
+  field_type: string;
+  is_required: boolean;
+  is_nullable: boolean;
+  default_value: string | null;
+  validation_rules: any[];
+  display_order: number;
+  section: string;
+  width: 'half' | 'full';
+  is_visible: boolean;
+  is_system_field: boolean;
+  reference_table: string | null;
+  reference_display_field: string | null;
+}
+
 const tabs = [
   { id: 'information', label: 'Partner Information', icon: '🤝' },
+  { id: 'clients', label: 'Clients', icon: '👥' },
   { id: 'billing', label: 'Billing Management', icon: '💰' }
 ];
 
@@ -54,10 +75,12 @@ export default function ChannelPartnerDetailPage() {
   const [saving, setSaving] = useState(false);
   const [editedPartner, setEditedPartner] = useState<ChannelPartner | null>(null);
   const [activeTab, setActiveTab] = useState('information');
+  const [fieldMetadata, setFieldMetadata] = useState<FieldMetadata[]>([]);
 
   useEffect(() => {
     if (params.id && user) {
       fetchPartner(params.id as string);
+      fetchFieldMetadata();
     }
   }, [params.id, user]);
 
@@ -66,6 +89,50 @@ export default function ChannelPartnerDetailPage() {
       setEditedPartner({ ...partner });
     }
   }, [partner]);
+
+  const fetchFieldMetadata = async () => {
+    try {
+      console.log('🔍 Fetching field metadata for channel_partners table');
+      const { data, error } = await supabase
+        .from('field_metadata')
+        .select('*')
+        .eq('table_name', 'channel_partners')
+        .order('display_order');
+
+      if (error) {
+        console.error('❌ Error fetching field metadata:', error);
+      } else {
+        console.log('✅ Fetched field metadata:', data);
+        if (!data || data.length === 0) {
+          console.log('No field metadata found, syncing...');
+          await syncFieldMetadata();
+        } else {
+          setFieldMetadata(data);
+        }
+      }
+    } catch (err) {
+      console.error('Unexpected error fetching field metadata:', err);
+    }
+  };
+
+  const syncFieldMetadata = async () => {
+    try {
+      console.log('🔄 Syncing field metadata for channel_partners table');
+      const { data, error } = await supabase.rpc('sync_table_metadata', {
+        table_name_param: 'channel_partners'
+      });
+
+      if (error) {
+        console.error('❌ Error syncing field metadata:', error);
+      } else {
+        console.log('✅ Field metadata synced:', data);
+        // Fetch the metadata again after syncing
+        fetchFieldMetadata();
+      }
+    } catch (err) {
+      console.error('Unexpected error syncing field metadata:', err);
+    }
+  };
 
   const fetchPartner = async (id: string) => {
     try {
@@ -166,6 +233,99 @@ export default function ChannelPartnerDetailPage() {
     }).format(amount);
   };
 
+  // Add helper function to get fields for a section
+  const getFieldsForSection = (section: string) => {
+    const fields = fieldMetadata
+      .filter(field => field.section === section && field.is_visible)
+      .sort((a, b) => a.display_order - b.display_order);
+    console.log(`Fields for section ${section}:`, fields);
+    return fields;
+  };
+
+  // Add helper function to render field value
+  const renderFieldValue = (field: FieldMetadata, value: any) => {
+    if (value === null || value === undefined) return 'N/A';
+
+    switch (field.field_type) {
+      case 'date':
+      case 'timestamptz':
+        return formatDate(value);
+      case 'boolean':
+        return value ? 'Yes' : 'No';
+      case 'reference':
+        // For channel partners, we might not have specific reference display logic like 'referred_by' in clients
+        // If there's a specific reference field for channel partners, add logic here
+        return value;
+      default:
+        return value;
+    }
+  };
+
+  // Add helper function to render field input
+  const renderFieldInput = (field: FieldMetadata, value: any) => {
+    const handleChange = (newValue: any) => {
+      if (editedPartner) {
+        setEditedPartner({ ...editedPartner, [field.api_name as keyof ChannelPartner]: newValue } as ChannelPartner);
+      }
+    };
+
+    switch (field.field_type) {
+      case 'date':
+      case 'timestamptz':
+        return (
+          <input
+            type="date"
+            value={value ? value.substring(0, 10) : ''}
+            onChange={(e) => handleChange(e.target.value)}
+            className="mt-1 block w-full border border-gray-300 rounded-md shadow-sm py-2 px-3 focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm"
+          />
+        );
+      case 'boolean':
+        return (
+          <select
+            value={value ? 'true' : 'false'}
+            onChange={(e) => handleChange(e.target.value === 'true')}
+            className="mt-1 block w-full border border-gray-300 rounded-md shadow-sm py-2 px-3 focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm"
+          >
+            <option value="true">Yes</option>
+            <option value="false">No</option>
+          </select>
+        );
+      case 'reference':
+        // Handle reference fields if needed, for now a text input
+        return (
+          <input
+            type="text"
+            value={value || ''}
+            onChange={(e) => handleChange(e.target.value)}
+            className="mt-1 block w-full border border-gray-300 rounded-md shadow-sm py-2 px-3 focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm"
+          />
+        );
+      case 'number':
+      case 'integer':
+      case 'decimal':
+        return (
+          <input
+            type="number"
+            value={value || ''}
+            onChange={(e) => handleChange(e.target.value)}
+            className="mt-1 block w-full border border-gray-300 rounded-md shadow-sm py-2 px-3 focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm"
+          />
+        );
+      case 'text':
+      case 'varchar':
+      default:
+        return (
+          <input
+            type="text"
+            value={value || ''}
+            onChange={(e) => handleChange(e.target.value)}
+            className="mt-1 block w-full border border-gray-300 rounded-md shadow-sm py-2 px-3 focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm"
+          />
+        );
+    }
+  };
+
   if (authLoading) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-gray-50">
@@ -242,15 +402,33 @@ export default function ChannelPartnerDetailPage() {
                 {partner.email && (
                   <p className="text-sm text-blue-600">{partner.email}</p>
                 )}
-                {/* User tracking info */}
-                <div className="mt-2 text-xs text-gray-500 space-y-1">
-                  {partner.creator && (
-                    <div>Created by: {partner.creator.full_name} ({partner.creator.email})</div>
-                  )}
-                  {partner.updater && (
-                    <div>Last updated by: {partner.updater.full_name} ({partner.updater.email})</div>
-                  )}
-                </div>
+              </div>
+              <div className="flex space-x-2">
+                {!isEditing ? (
+                  <button
+                    onClick={() => setIsEditing(true)}
+                    className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2"
+                  >
+                    Edit Partner
+                  </button>
+                ) : (
+                  <>
+                    <button
+                      onClick={handleSave}
+                      disabled={saving}
+                      className="px-4 py-2 bg-green-600 text-white rounded-md hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-green-500 focus:ring-offset-2 disabled:opacity-50"
+                    >
+                      {saving ? 'Saving...' : 'Save Changes'}
+                    </button>
+                    <button
+                      onClick={handleCancel}
+                      disabled={saving}
+                      className="px-4 py-2 bg-gray-300 text-gray-800 rounded-md hover:bg-gray-400 focus:outline-none focus:ring-2 focus:ring-gray-400 focus:ring-offset-2 disabled:opacity-50"
+                    >
+                      Cancel
+                    </button>
+                  </>
+                )}
               </div>
             </div>
           </div>
@@ -285,157 +463,63 @@ export default function ChannelPartnerDetailPage() {
           <div className="p-6">
             {/* Partner Information Tab */}
             {activeTab === 'information' && (
-              <div>
-                <div className="flex items-center justify-between mb-6">
-                  <h3 className="text-lg font-semibold text-gray-900">Partner Information</h3>
-                  
-                  {/* Edit/Save/Cancel Buttons */}
-                  {user.user?.role !== 'viewer' && (
-                    <>
-                      {!isEditing ? (
-                        <button 
-                          onClick={() => setIsEditing(true)}
-                          className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-medium transition-colors duration-200 flex items-center gap-2"
-                          disabled={saving}
-                        >
-                          <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
-                          </svg>
-                          Edit
-                        </button>
-                      ) : (
-                        <div className="flex gap-2">
-                          <button 
-                            onClick={handleSave}
-                            className="px-4 py-2 bg-green-600 hover:bg-green-700 text-white rounded-lg font-medium transition-colors duration-200 flex items-center gap-2"
-                            disabled={saving}
-                          >
-                            {saving ? (
-                              <>
-                                <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white"></div>
-                                Saving...
-                              </>
-                            ) : (
-                              <>
-                                <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
-                                </svg>
-                                Save
-                              </>
-                            )}
-                          </button>
-                          <button 
-                            onClick={handleCancel}
-                            className="px-4 py-2 bg-gray-600 hover:bg-gray-700 text-white rounded-lg font-medium transition-colors duration-200 flex items-center gap-2"
-                            disabled={saving}
-                          >
-                            <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                            </svg>
-                            Cancel
-                          </button>
+              <div className="space-y-8 p-6">
+                {/* Dynamic Sections */}
+                {(() => {
+                  const uniqueSections = Array.from(new Set(fieldMetadata.map(f => f.section)));
+                  const predefinedOrder = ['basic', 'details', 'system'];
+
+                  const sortedSections = uniqueSections.sort((a, b) => {
+                    const indexA = predefinedOrder.indexOf(a);
+                    const indexB = predefinedOrder.indexOf(b);
+
+                    if (indexA === -1 && indexB === -1) {
+                      return a.localeCompare(b); // Both are custom, sort alphabetically
+                    }
+                    if (indexA === -1) {
+                      return 1; // a is custom, b is predefined, b comes first
+                    }
+                    if (indexB === -1) {
+                      return -1; // a is predefined, b is custom, a comes first
+                    }
+                    return indexA - indexB; // Sort by predefined order
+                  });
+
+                  return sortedSections.map(section => {
+                    const fields = getFieldsForSection(section);
+                    if (fields.length === 0) return null;
+
+                    return (
+                      <div key={section} className="space-y-4">
+                        <h2 className="text-lg font-bold text-gray-900">
+                          {section.charAt(0).toUpperCase() + section.slice(1)}
+                        </h2>
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-x-6 gap-y-4">
+                          {fields.map(field => (
+                            <div key={field.id} className={field.width === 'full' ? 'col-span-2' : ''}>
+                              <p className="text-sm font-medium text-gray-500">{field.display_label}</p>
+                              {!isEditing ? (
+                                <p className="mt-1 text-sm text-gray-900">
+                                  {renderFieldValue(field, partner[field.api_name as keyof ChannelPartner])}
+                                </p>
+                              ) : (
+                                renderFieldInput(field, editedPartner?.[field.api_name as keyof ChannelPartner])
+                              )}
+                            </div>
+                          ))}
                         </div>
-                      )}
-                    </>
-                  )}
-                </div>
-                
-                <div className="space-y-6">
-                  {/* Basic Information */}
-                  <div className="space-y-4">
-                    <h4 className="text-md font-medium text-gray-900">Basic Details</h4>
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                      <div>
-                        <label className="block text-sm font-medium text-gray-500 mb-1">Partner Name</label>
-                        {isEditing ? (
-                          <input
-                            type="text"
-                            value={editedPartner.name}
-                            onChange={(e) => setEditedPartner({ ...editedPartner, name: e.target.value })}
-                            className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                          />
-                        ) : (
-                          <p className="text-sm text-gray-900 py-2">{partner.name}</p>
-                        )}
                       </div>
-                      <div>
-                        <label className="block text-sm font-medium text-gray-500 mb-1">Country</label>
-                        {isEditing ? (
-                          <input
-                            type="text"
-                            value={editedPartner.country || ''}
-                            onChange={(e) => setEditedPartner({ ...editedPartner, country: e.target.value })}
-                            className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                          />
-                        ) : (
-                          <p className="text-sm text-gray-900 py-2">{partner.country || 'Not specified'}</p>
-                        )}
-                      </div>
-                      <div>
-                        <label className="block text-sm font-medium text-gray-500 mb-1">Email Address</label>
-                        {isEditing ? (
-                          <input
-                            type="email"
-                            value={editedPartner.email || ''}
-                            onChange={(e) => setEditedPartner({ ...editedPartner, email: e.target.value })}
-                            className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                          />
-                        ) : (
-                          <p className="text-sm text-gray-900 py-2">{partner.email || 'Not provided'}</p>
-                        )}
-                      </div>
-                      <div>
-                        <label className="block text-sm font-medium text-gray-500 mb-1">Phone Number</label>
-                        {isEditing ? (
-                          <input
-                            type="tel"
-                            value={editedPartner.phone || ''}
-                            onChange={(e) => setEditedPartner({ ...editedPartner, phone: e.target.value })}
-                            className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                          />
-                        ) : (
-                          <p className="text-sm text-gray-900 py-2">{partner.phone || 'Not provided'}</p>
-                        )}
-                      </div>
-                    </div>
-                  </div>
+                    );
+                  });
+                })()}
+              </div>
+            )}
 
-                  {/* Billing Information */}
-                  <div className="space-y-4">
-                    <h4 className="text-md font-medium text-gray-900">Billing Information</h4>
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                      <div>
-                        <label className="block text-sm font-medium text-gray-500 mb-1">Billing Rate (USD)</label>
-                        {isEditing ? (
-                          <input
-                            type="number"
-                            step="0.01"
-                            value={editedPartner.billing_rate || ''}
-                            onChange={(e) => setEditedPartner({ ...editedPartner, billing_rate: parseFloat(e.target.value) || null })}
-                            className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                          />
-                        ) : (
-                          <p className="text-sm text-gray-900 py-2">{formatCurrency(partner.billing_rate)}</p>
-                        )}
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* Timestamps */}
-                  <div className="space-y-4">
-                    <h4 className="text-md font-medium text-gray-900">Timeline</h4>
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                      <div>
-                        <label className="block text-sm font-medium text-gray-500 mb-1">Created</label>
-                        <p className="text-sm text-gray-900 py-2">{formatDate(partner.created_at)}</p>
-                      </div>
-                      <div>
-                        <label className="block text-sm font-medium text-gray-500 mb-1">Last Updated</label>
-                        <p className="text-sm text-gray-900 py-2">{formatDate(partner.updated_at)}</p>
-                      </div>
-                    </div>
-                  </div>
-                </div>
+            {/* Clients Tab */}
+            {activeTab === 'clients' && partner && (
+              <div className="mt-8 bg-white rounded-lg shadow-xl p-6">
+                <h2 className="text-lg font-bold text-gray-900 mb-4">Clients Referred by {partner.name}</h2>
+                <ChannelPartnerClientsList channelPartnerId={partner.id} />
               </div>
             )}
 

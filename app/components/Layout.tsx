@@ -26,7 +26,7 @@ const tabs = [
 
 export default function Layout({ children }: LayoutProps) {
   const [activeTab, setActiveTab] = useState('clients');
-  const { user, refreshUser } = useAuth();
+  const { user, refreshUser, impersonatedUserName, setImpersonatedUserName } = useAuth();
   const pathname = usePathname();
   const router = useRouter();
 
@@ -106,6 +106,24 @@ export default function Layout({ children }: LayoutProps) {
             <div className="flex items-center space-x-4">
               {user?.user && (
                 <>
+                  {impersonatedUserName && (
+                    <div className="text-sm text-yellow-700 bg-yellow-100 px-3 py-1 rounded-full mr-4 flex items-center gap-2">
+                      <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-4 h-4">
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M17.982 18.725A7.488 7.488 0 0 0 12 15.75a7.488 7.488 0 0 0-5.982 2.975m11.963 0a9 9 0 1 0-11.963 0m11.963 0A8.966 8.966 0 0 1 12 21a8.966 8.966 0 0 1-5.982-2.275M15 9.75a3 3 0 1 1-6 0 3 3 0 0 1 6 0Z" />
+                      </svg>
+                      Logged in as <span className="font-semibold">{impersonatedUserName}</span>
+                      <button
+                        onClick={() => {
+                          setImpersonatedUserName(null);
+                          localStorage.removeItem('impersonatedUserName');
+                          window.location.href = '/';
+                        }}
+                        className="ml-2 text-yellow-800 hover:text-yellow-900 focus:outline-none"
+                      >
+                        (Exit Impersonation)
+                      </button>
+                    </div>
+                  )}
                   <div className="flex items-center space-x-2">
                     <div className="w-8 h-8 bg-blue-600 rounded-full flex items-center justify-center">
                       <span className="text-white text-sm font-medium">

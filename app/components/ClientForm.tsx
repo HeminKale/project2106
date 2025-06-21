@@ -14,7 +14,6 @@ const supabase = createClient(supabaseUrl, supabaseKey);
 interface FormData {
   name: string;
   email: string;
-  channel_partner_id: string;
   referred_by: string;
   certification_date: string;
   renewal_date: string;
@@ -116,7 +115,6 @@ export default function ClientForm() {
         email: data.email,
         draft_uploaded: false,
         certificate_sent: false,
-        channel_partner_id: Number(data.channel_partner_id),
         referred_by: data.referred_by || null,
         certification_date: data.certification_date || null,
         renewal_date: data.renewal_date || null,
@@ -144,7 +142,6 @@ export default function ClientForm() {
         reset({
           name: '',
           email: '',
-          channel_partner_id: '',
           referred_by: '',
           certification_date: '',
           renewal_date: '',
@@ -213,25 +210,6 @@ export default function ClientForm() {
                 className="w-full border border-gray-300 rounded-md p-3 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all"
               />
               {errors.email && <p className="text-red-500 text-sm mt-1">{errors.email.message}</p>}
-            </div>
-
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">
-                Channel Partner ID *
-              </label>
-              <input 
-                {...register('channel_partner_id', { 
-                  required: 'Channel Partner ID is required',
-                  pattern: {
-                    value: /^\d+$/,
-                    message: 'Please enter a valid number'
-                  }
-                })} 
-                placeholder="Enter channel partner ID" 
-                type="number" 
-                className="w-full border border-gray-300 rounded-md p-3 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all"
-              />
-              {errors.channel_partner_id && <p className="text-red-500 text-sm mt-1">{errors.channel_partner_id.message}</p>}
             </div>
 
             <div>

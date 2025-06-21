@@ -9,7 +9,7 @@ const supabase = createClient(supabaseUrl, supabaseKey);
 
 interface BillingManagerProps {
   clientId: string;
-  clientName: string;
+  // clientName: string; // Removed as it's not relevant for billing management
 }
 
 interface BillingRecord {
@@ -29,7 +29,7 @@ const statusOptions = [
   { value: 'cancelled', label: 'Cancelled', color: 'bg-gray-100 text-gray-800' }
 ];
 
-export default function BillingManager({ clientId, clientName }: BillingManagerProps) {
+export default function BillingManager({ clientId }: BillingManagerProps) {
   const [billingRecords, setBillingRecords] = useState<BillingRecord[]>([]);
   const [loading, setLoading] = useState(true);
   const [showAddForm, setShowAddForm] = useState(false);

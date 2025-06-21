@@ -54,6 +54,32 @@ export default function ApplicationFormManager({ clientId, onDraftGenerated }: A
         throw new Error('Please select a file');
       }
 
+      // --- RLS DIAGNOSTIC START ---
+      console.log('Performing RLS diagnostic check before upload...');
+      try {
+        const { data: userDataCheck, error: userCheckError } = await supabase
+          .from('users') // Assuming 'public.users' table exists for roles/profiles
+          .select('id')
+          .eq('id', user.id)
+          .single();
+
+        if (userCheckError) {
+          console.error('❌ RLS Diagnostic: User data check failed:', userCheckError);
+          throw new Error(`Authentication check failed: ${userCheckError.message}`);
+        } else if (!userDataCheck) {
+          console.error('❌ RLS Diagnostic: Authenticated user not found in public.users table.');
+          throw new Error('Authenticated user profile missing.');
+        } else {
+          console.log('✅ RLS Diagnostic: User authentication confirmed via database query.', userDataCheck.id);
+        }
+      } catch (e) {
+        console.error('Fatal RLS Diagnostic Error:', e);
+        setError(`Failed RLS check: ${e instanceof Error ? e.message : 'Unknown error'}`);
+        setUploading(false);
+        return; // Stop execution if authentication check fails
+      }
+      console.log('--- RLS DIAGNOSTIC END ---');
+
       console.log('Uploading for client ID:', clientId);
       console.log('Authenticated user ID (from context):', user.id);
       console.log('File object:', { name: file.name, type: file.type, size: file.size });
@@ -72,7 +98,7 @@ export default function ApplicationFormManager({ clientId, onDraftGenerated }: A
         .upload(fileName, file, { upsert: true });
 
       if (uploadError) {
-        console.error('Supabase Storage Upload Error:', uploadError);
+        console.error('Supabase Storage Upload Error:', JSON.stringify(uploadError, null, 2));
         throw uploadError;
       }
       console.log('Supabase Storage Upload Data:', data);
@@ -112,11 +138,22 @@ export default function ApplicationFormManager({ clientId, onDraftGenerated }: A
         throw new Error('Please upload an application form first');
       }
 
+      // Get the authenticated session token
+      const { data: { session }, error: sessionError } = await supabase.auth.getSession();
+
+      console.log('getSession() result:', { session, sessionError });
+
+      if (sessionError || !session) {
+        console.error('❌ Session retrieval failed:', sessionError || 'No session object');
+        throw new Error('User session not found. Please log in again.');
+      }
+
       // Call our document processing API
       const response = await fetch('/api/documents/process', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
+          'Authorization': `Bearer ${session.access_token}`,
         },
         body: JSON.stringify({
           clientId,

@@ -231,7 +231,12 @@ export default function ChannelPartnerList() {
                 {filteredPartners.map((partner) => (
                   <tr key={partner.id} className="hover:bg-gray-50 transition-colors duration-150">
                     <td className="px-6 py-4 whitespace-nowrap">
-                      <div className="text-sm font-medium text-gray-900">{partner.name}</div>
+                      <Link
+                        href={`/channel-partners/${partner.id}`}
+                        className="text-blue-600 hover:text-blue-800 font-medium"
+                      >
+                        {partner.name}
+                      </Link>
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap">
                       <div className="text-sm text-gray-900">{partner.country || 'Not specified'}</div>
@@ -249,12 +254,6 @@ export default function ChannelPartnerList() {
                       {formatDate(partner.created_at)}
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
-                      <Link
-                        href={`/channel-partners/${partner.id}`}
-                        className="text-blue-600 hover:text-blue-900 transition-colors duration-150"
-                      >
-                        View
-                      </Link>
                     </td>
                   </tr>
                 ))}
