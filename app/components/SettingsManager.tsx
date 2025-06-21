@@ -202,17 +202,19 @@ export default function SettingsManager({ initialActiveMainTab = 'home' }: { ini
   
   // Field creation
   const [showCreateField, setShowCreateField] = useState(false);
-  const [newField, setNewField] = useState({
+  const [newField, setNewField] = useState<Omit<FieldMetadata, 'id' | 'table_name' | 'is_system_field' | 'is_visible'>>({
     api_name: '',
     display_label: '',
     field_type: 'text',
     is_required: false,
+    is_nullable: true, // Default to nullable
     default_value: '',
-    section: 'details' as 'basic' | 'details' | 'system',
-    width: 'half' as 'half' | 'full',
+    validation_rules: [], // Added validation_rules
+    display_order: 0, // Added display_order
+    section: 'details',
+    width: 'half',
     reference_table: '',
     reference_display_field: '',
-    is_system_field: false, // Added is_system_field
   });
   const [creatingField, setCreatingField] = useState(false);
   
@@ -349,21 +351,6 @@ export default function SettingsManager({ initialActiveMainTab = 'home' }: { ini
     try {
       console.log('🔧 Starting object creation process:', newObject);
 
-      // First, check if the table already exists
-      const { data: existingTable, error: checkError } = await supabase
-        .from('information_schema.tables')
-        .select('table_name')
-        .eq('table_name', newObject.api_name)
-        .single();
-
-      if (checkError) {
-        console.error('Error checking existing table:', checkError);
-      }
-
-      if (existingTable) {
-        throw new Error(`Table ${newObject.api_name} already exists`);
-      }
-
       // Create the table
       const createTableSQL = `
         CREATE TABLE IF NOT EXISTS ${newObject.api_name} (
@@ -396,15 +383,16 @@ export default function SettingsManager({ initialActiveMainTab = 'home' }: { ini
 
       console.log('Executing SQL:', createTableSQL);
 
-      const { error: createError } = await supabase.rpc('execute_sql', { 
-        sql_query: createTableSQL,
-        is_mutation: true
+      const { error: createError } = await supabase.rpc('execute_sql', {
+        sql_query: createTableSQL
       });
 
       if (createError) {
         console.error('Error creating table:', createError);
         throw createError;
       }
+
+      // No need to check for data, as DDL statements like CREATE TABLE don't return rows
 
       console.log('Table created successfully');
 
@@ -503,19 +491,21 @@ export default function SettingsManager({ initialActiveMainTab = 'home' }: { ini
 
     try {
       const { error } = await supabase.rpc('create_field_and_metadata', {
-        table_name_param: selectedObject,
-        api_name_param: newField.api_name,
-        display_label_param: newField.display_label,
-        field_type_param: newField.field_type,
-        is_required_param: newField.is_required,
-        is_nullable_param: !newField.is_required, // Assuming if required, then not nullable
-        default_value_param: newField.default_value,
-        section_param: newField.section,
-        width_param: newField.width,
-        is_visible_param: true, // New fields are visible by default
-        is_system_field_param: false, // New fields are not system fields
-        reference_table_param: newField.field_type === 'reference' ? newField.reference_table : null,
-        reference_display_field_param: newField.field_type === 'reference' ? newField.reference_display_field : null,
+        p_api_name: newField.api_name,
+        p_default_value: newField.default_value === '' ? null : newField.default_value,
+        p_display_label: newField.display_label,
+        p_display_order: newField.display_order,
+        p_field_type: newField.field_type,
+        p_is_nullable: newField.is_nullable,
+        p_is_required: newField.is_required,
+        p_is_system_field: false,
+        p_is_visible: true,
+        p_reference_display_field: newField.field_type === 'reference' && newField.reference_display_field !== '' ? newField.reference_display_field : null,
+        p_reference_table: newField.field_type === 'reference' && newField.reference_table !== '' ? newField.reference_table : null,
+        p_section: newField.section,
+        p_table_name: selectedObject,
+        p_validation_rules: newField.validation_rules,
+        p_width: newField.width,
       });
 
       if (error) {
@@ -542,18 +532,18 @@ export default function SettingsManager({ initialActiveMainTab = 'home' }: { ini
 
     try {
       const { error } = await supabase.rpc('update_field_metadata', {
-        field_id_param: editingField.id,
+        default_value_param: editingField.default_value === '' ? null : editingField.default_value,
         display_label_param: editingField.display_label,
+        field_id_param: editingField.id,
         field_type_param: editingField.field_type,
-        is_required_param: editingField.is_required,
         is_nullable_param: !editingField.is_required,
-        default_value_param: editingField.default_value,
+        is_required_param: editingField.is_required,
+        is_system_field_param: editingField.is_system_field,
+        is_visible_param: editingField.is_visible,
+        reference_display_field_param: editingField.field_type === 'reference' && editingField.reference_display_field !== '' ? editingField.reference_display_field : null,
+        reference_table_param: editingField.field_type === 'reference' && editingField.reference_table !== '' ? editingField.reference_table : null,
         section_param: editingField.section,
         width_param: editingField.width,
-        is_visible_param: editingField.is_visible,
-        is_system_field_param: editingField.is_system_field, // Keep system field status
-        reference_table_param: editingField.field_type === 'reference' ? editingField.reference_table : null,
-        reference_display_field_param: editingField.field_type === 'reference' ? editingField.reference_display_field : null,
       });
 
       if (error) {
@@ -605,12 +595,14 @@ export default function SettingsManager({ initialActiveMainTab = 'home' }: { ini
       display_label: '',
       field_type: 'text',
       is_required: false,
+      is_nullable: true, // Default to nullable
       default_value: '',
+      validation_rules: [], // Added validation_rules
+      display_order: 0, // Added display_order
       section: 'details',
       width: 'half',
       reference_table: '',
       reference_display_field: '',
-      is_system_field: false,
     });
   };
 
@@ -1603,7 +1595,7 @@ export default function SettingsManager({ initialActiveMainTab = 'home' }: { ini
                               <select
                                 id="reference-table"
                                 className="mt-1 block w-full pl-3 pr-10 py-2 text-base border-gray-300 focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm rounded-md"
-                                value={newField.reference_table}
+                                value={newField.reference_table || ''}
                                 onChange={(e) => setNewField({ ...newField, reference_table: e.target.value })}
                               >
                                 <option value="">Select a table</option>
@@ -1615,63 +1607,39 @@ export default function SettingsManager({ initialActiveMainTab = 'home' }: { ini
                               </select>
                             </div>
                             <div>
-                              <label htmlFor="reference-display-field" className="block text-sm font-medium text-gray-700">Reference Display Field</label>
+                              <label htmlFor="reference-display-field" className="block text-sm font-medium text-gray-700">Reference Display Field (Optional)</label>
                               <input
                                 type="text"
                                 id="reference-display-field"
                                 className="mt-1 focus:ring-blue-500 focus:border-blue-500 block w-full shadow-sm sm:text-sm border-gray-300 rounded-md"
-                                value={newField.reference_display_field}
+                                value={newField.reference_display_field || ''}
                                 onChange={(e) => setNewField({ ...newField, reference_display_field: e.target.value })}
-                                placeholder="e.g., name"
                               />
                             </div>
                           </>
                         )}
                         <div>
-                          <label className="flex items-center">
-                            <input
-                              type="checkbox"
-                              className="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded"
-                              checked={newField.is_required}
-                              onChange={(e) => setNewField({ ...newField, is_required: e.target.checked })}
-                            />
-                            <span className="ml-2 text-sm text-gray-700">Required Field</span>
-                          </label>
-                        </div>
-                        <div>
-                          <label htmlFor="field-default-value" className="block text-sm font-medium text-gray-700">Default Value</label>
+                          <label htmlFor="field-default-value" className="block text-sm font-medium text-gray-700">Default Value (Optional)</label>
                           <input
                             type="text"
                             id="field-default-value"
                             className="mt-1 focus:ring-blue-500 focus:border-blue-500 block w-full shadow-sm sm:text-sm border-gray-300 rounded-md"
-                            value={newField.default_value}
+                            value={newField.default_value || ''}
                             onChange={(e) => setNewField({ ...newField, default_value: e.target.value })}
                           />
                         </div>
-                        <div>
-                          <label htmlFor="field-section" className="block text-sm font-medium text-gray-700">Section</label>
-                          <select
-                            id="field-section"
-                            className="mt-1 block w-full pl-3 pr-10 py-2 text-base border-gray-300 focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm rounded-md"
-                            value={newField.section}
-                            onChange={(e) => setNewField({ ...newField, section: e.target.value as 'basic' | 'details' | 'system' })}
-                          >
-                            <option value="basic">Basic</option>
-                            <option value="details">Details</option>
-                            <option value="system">System</option>
-                          </select>
-                        </div>
-                        <div>
-                          <label htmlFor="field-width" className="block text-sm font-medium text-gray-700">Width</label>
-                          <select
-                            id="field-width"
-                            className="mt-1 block w-full pl-3 pr-10 py-2 text-base border-gray-300 focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm rounded-md"
-                            value={newField.width}
-                            onChange={(e) => setNewField({ ...newField, width: e.target.value as 'half' | 'full' })}
-                          >
-                            <option value="half">Half Width</option>
-                            <option value="full">Full Width</option>
-                          </select>
+                        <div className="flex items-center">
+                          <input
+                            id="is-required"
+                            name="is-required"
+                            type="checkbox"
+                            className="focus:ring-blue-500 h-4 w-4 text-blue-600 border-gray-300 rounded"
+                            checked={newField.is_required}
+                            onChange={(e) => setNewField({ ...newField, is_required: e.target.checked, is_nullable: !e.target.checked })}
+                          />
+                          <label htmlFor="is-required" className="ml-2 block text-sm text-gray-900">
+                            Required Field
+                          </label>
                         </div>
                       </div>
                     </div>
@@ -1680,11 +1648,11 @@ export default function SettingsManager({ initialActiveMainTab = 'home' }: { ini
                 <div className="bg-gray-50 px-4 py-3 sm:px-6 sm:flex sm:flex-row-reverse">
                   <button
                     type="button"
-                    className="w-full inline-flex justify-center rounded-md border border-transparent shadow-sm px-4 py-2 bg-blue-600 text-base font-medium text-white hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 sm:ml-3 sm:w-auto sm:text-sm"
+                    className="w-full inline-flex justify-center rounded-md border border-transparent shadow-sm px-4 py-2 bg-green-600 text-base font-medium text-white hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-green-500 sm:ml-3 sm:w-auto sm:text-sm"
                     onClick={handleCreateField}
                     disabled={creatingField}
                   >
-                    {creatingField ? 'Creating...' : 'Create Field'}
+                    {creatingField ? 'Creating...' : 'Create New Field'}
                   </button>
                   <button
                     type="button"
@@ -1692,7 +1660,9 @@ export default function SettingsManager({ initialActiveMainTab = 'home' }: { ini
                     onClick={() => {
                       setShowCreateField(false);
                       resetNewField();
+                      setMessage('');
                     }}
+                    disabled={creatingField}
                   >
                     Cancel
                   </button>
@@ -1838,6 +1808,7 @@ export default function SettingsManager({ initialActiveMainTab = 'home' }: { ini
                             className="mt-1 focus:ring-blue-500 focus:border-blue-500 block w-full shadow-sm sm:text-sm border-gray-300 rounded-md"
                             value={editingField.api_name}
                             onChange={(e) => setEditingField({ ...editingField, api_name: e.target.value })}
+                            disabled // API Name should not be editable after creation
                           />
                         </div>
                         <div>
@@ -1847,6 +1818,7 @@ export default function SettingsManager({ initialActiveMainTab = 'home' }: { ini
                             className="mt-1 block w-full pl-3 pr-10 py-2 text-base border-gray-300 focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm rounded-md"
                             value={editingField.field_type}
                             onChange={(e) => setEditingField({ ...editingField, field_type: e.target.value })}
+                            disabled // Field Type should not be editable after creation
                           >
                             {dataTypes.map((type) => (
                               <option key={type.value} value={type.value}>
@@ -1864,6 +1836,7 @@ export default function SettingsManager({ initialActiveMainTab = 'home' }: { ini
                                 className="mt-1 block w-full pl-3 pr-10 py-2 text-base border-gray-300 focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm rounded-md"
                                 value={editingField.reference_table || ''}
                                 onChange={(e) => setEditingField({ ...editingField, reference_table: e.target.value })}
+                                disabled // Reference Table should not be editable after creation
                               >
                                 <option value="">Select a table</option>
                                 {objects.map((obj) => (
@@ -1874,31 +1847,19 @@ export default function SettingsManager({ initialActiveMainTab = 'home' }: { ini
                               </select>
                             </div>
                             <div>
-                              <label htmlFor="edit-reference-display-field" className="block text-sm font-medium text-gray-700">Reference Display Field</label>
+                              <label htmlFor="edit-reference-display-field" className="block text-sm font-medium text-gray-700">Reference Display Field (Optional)</label>
                               <input
                                 type="text"
                                 id="edit-reference-display-field"
                                 className="mt-1 focus:ring-blue-500 focus:border-blue-500 block w-full shadow-sm sm:text-sm border-gray-300 rounded-md"
                                 value={editingField.reference_display_field || ''}
                                 onChange={(e) => setEditingField({ ...editingField, reference_display_field: e.target.value })}
-                                placeholder="e.g., name"
                               />
                             </div>
                           </>
                         )}
                         <div>
-                          <label className="flex items-center">
-                            <input
-                              type="checkbox"
-                              className="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded"
-                              checked={editingField.is_required}
-                              onChange={(e) => setEditingField({ ...editingField, is_required: e.target.checked })}
-                            />
-                            <span className="ml-2 text-sm text-gray-700">Required Field</span>
-                          </label>
-                        </div>
-                        <div>
-                          <label htmlFor="edit-field-default-value" className="block text-sm font-medium text-gray-700">Default Value</label>
+                          <label htmlFor="edit-field-default-value" className="block text-sm font-medium text-gray-700">Default Value (Optional)</label>
                           <input
                             type="text"
                             id="edit-field-default-value"
@@ -1907,40 +1868,17 @@ export default function SettingsManager({ initialActiveMainTab = 'home' }: { ini
                             onChange={(e) => setEditingField({ ...editingField, default_value: e.target.value })}
                           />
                         </div>
-                        <div>
-                          <label htmlFor="edit-field-section" className="block text-sm font-medium text-gray-700">Section</label>
-                          <select
-                            id="edit-field-section"
-                            className="mt-1 block w-full pl-3 pr-10 py-2 text-base border-gray-300 focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm rounded-md"
-                            value={editingField.section}
-                            onChange={(e) => setEditingField({ ...editingField, section: e.target.value as 'basic' | 'details' | 'system' })}
-                          >
-                            <option value="basic">Basic</option>
-                            <option value="details">Details</option>
-                            <option value="system">System</option>
-                          </select>
-                        </div>
-                        <div>
-                          <label htmlFor="edit-field-width" className="block text-sm font-medium text-gray-700">Width</label>
-                          <select
-                            id="edit-field-width"
-                            className="mt-1 block w-full pl-3 pr-10 py-2 text-base border-gray-300 focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm rounded-md"
-                            value={editingField.width}
-                            onChange={(e) => setEditingField({ ...editingField, width: e.target.value as 'half' | 'full' })}
-                          >
-                            <option value="half">Half Width</option>
-                            <option value="full">Full Width</option>
-                          </select>
-                        </div>
-                        <div>
-                          <label className="flex items-center">
-                            <input
-                              type="checkbox"
-                              className="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded"
-                              checked={editingField.is_visible}
-                              onChange={(e) => setEditingField({ ...editingField, is_visible: e.target.checked })}
-                            />
-                            <span className="ml-2 text-sm text-gray-700">Visible</span>
+                        <div className="flex items-center">
+                          <input
+                            id="edit-is-required"
+                            name="edit-is-required"
+                            type="checkbox"
+                            className="focus:ring-blue-500 h-4 w-4 text-blue-600 border-gray-300 rounded"
+                            checked={editingField.is_required}
+                            onChange={(e) => setEditingField({ ...editingField, is_required: e.target.checked, is_nullable: !e.target.checked })}
+                          />
+                          <label htmlFor="edit-is-required" className="ml-2 block text-sm text-gray-900">
+                            Required Field
                           </label>
                         </div>
                       </div>
@@ -1962,7 +1900,9 @@ export default function SettingsManager({ initialActiveMainTab = 'home' }: { ini
                     onClick={() => {
                       setShowEditFieldModal(false);
                       setEditingField(null);
+                      setMessage('');
                     }}
+                    disabled={saving}
                   >
                     Cancel
                   </button>
