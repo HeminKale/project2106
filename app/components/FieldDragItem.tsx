@@ -44,13 +44,13 @@ const FieldDragItem: React.FC<FieldDragItemProps> = ({
       if (!ref.current) {
         return;
       }
-      const draggedId = item.id; // ID of the dragged item
+      const dragId = item.id; // ID of the dragged item
       const hoverId = field.id; // ID of the hovered item
-      const draggedSection = item.section; // Section of the dragged item
-      const hoverSection = field.section; // Section of the hovered item
+      const dragSec = item.section; // Section of the dragged item
+      const hoverSec = field.section; // Section of the hovered item
 
-      // Don't replace items with themselves unless changing sections
-      if (draggedId === hoverId && draggedSection === hoverSection) {
+      // Don't replace items with themselves
+      if (dragId === hoverId && dragSec === hoverSec) {
         return;
       }
 
@@ -71,31 +71,20 @@ const FieldDragItem: React.FC<FieldDragItemProps> = ({
       // When dragging upwards, only move when the cursor is above 50%
 
       // Dragging downwards within the same section
-      if (draggedId < hoverId && hoverClientY < hoverMiddleY && draggedSection === hoverSection) {
+      if (dragId < hoverId && hoverClientY < hoverMiddleY && dragSec === hoverSec) {
         return;
       }
 
       // Dragging upwards within the same section
-      if (draggedId > hoverId && hoverClientY > hoverMiddleY && draggedSection === hoverSection) {
+      if (dragId > hoverId && hoverClientY > hoverMiddleY && dragSec === hoverSec) {
         return;
       }
 
-      // If dragging across sections, always allow the move if over a valid drop target
-      if (draggedSection !== hoverSection) {
-        moveField(draggedId, hoverId, draggedSection, hoverSection);
-        item.id = hoverId; // Update dragged item's id
-        item.section = hoverSection; // Update dragged item's section
-        return;
-      }
+      // Perform the move
+      moveField(dragId, hoverId, dragSec, hoverSec);
 
-      // Time to actually perform the action for same-section moves
-      moveField(draggedId, hoverId, draggedSection, hoverSection);
-
-      // Note: we're mutating the monitor item here!
-      // Generally it's better to avoid mutations, but it's okay here for the sake of performance
-      // to avoid expensive index searches.
-      item.id = hoverId;
-      item.section = hoverSection;
+      // Note: we're NOT mutating the monitor item here anymore!
+      // This prevents the identity swap bug
     },
   }));
 
@@ -105,16 +94,9 @@ const FieldDragItem: React.FC<FieldDragItemProps> = ({
     <div
       ref={ref}
       style={{ opacity: isDragging ? 0.5 : 1, cursor: 'grab' }}
-      className={`flex items-center justify-between p-2 bg-gray-50 rounded ${field.width === 'full' ? 'col-span-2' : ''}`}
+      className="flex items-center justify-between p-2 bg-gray-50 rounded"
     >
       <div className="flex items-center gap-3">
-        <input
-          type="checkbox"
-          checked={field.is_visible}
-          onChange={(e) => {
-            onUpdateFieldProperty(field.id, 'is_visible', e.target.checked);
-          }}
-        />
         <span className="font-medium">{field.display_label}</span>
         <span className="text-sm text-gray-500">({field.api_name})</span>
         {field.reference_table && (
@@ -124,25 +106,6 @@ const FieldDragItem: React.FC<FieldDragItemProps> = ({
         )}
       </div>
       <div className="flex items-center gap-2">
-        <select
-          value={field.width}
-          onChange={(e) => {
-            onUpdateFieldProperty(field.id, 'width', e.target.value as 'full' | 'half');
-          }}
-          className="text-sm border rounded px-2 py-1"
-        >
-          <option value="half">Half Width</option>
-          <option value="full">Full Width</option>
-        </select>
-        <input
-          type="checkbox"
-          checked={field.is_required}
-          onChange={(e) => {
-            onUpdateFieldProperty(field.id, 'is_required', e.target.checked);
-          }}
-          title="Required field"
-        />
-        <span className="text-xs text-gray-500">Req</span>
         {!checkIsSystemField(field.api_name) && ( // Use passed prop to check system field status
           <button
             className="text-blue-500 hover:text-blue-700 p-1"
