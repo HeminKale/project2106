@@ -4,15 +4,19 @@ import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { createClient } from '@supabase/supabase-js';
 import { useAuth } from './AuthProvider';
 import UserCreator from './UserCreator';
+import ProfileManager from './ProfileManager';
 import { DndProvider, useDrag, useDrop } from 'react-dnd';
 import { HTML5Backend } from 'react-dnd-html5-backend';
 import FieldDragItem from './FieldDragItem';
 import ObjectLayoutEditor from './ObjectLayoutEditor';
 import { ToastProvider } from './Toast';
+import TabSettingsPage from './TabSettingsPage';
+import { formatErrorMessage, logError } from '../utils/errorHandler';
 
-const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
-const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '';
-const supabase = createClient(supabaseUrl, supabaseKey);
+
+const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
+const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
+export const supabase = createClient(supabaseUrl, supabaseKey);
 
 export interface DatabaseObject {
   table_name: string;
@@ -70,6 +74,8 @@ const homeSections = [
 ];
 
 const objectManagerSections = [
+  { id: 'details', label: 'Details', icon: '📋' },
+  { id: 'fields', label: 'Fields', icon: '📝' },
   { id: 'layout', label: 'Page Layout', icon: '📝' },
   { id: 'validation', label: 'Validation Rules', icon: '✅' },
 ];
@@ -123,7 +129,7 @@ function SettingsManagerContent({ initialActiveMainTab = 'home' }: { initialActi
   const [objects, setObjects] = useState<DatabaseObject[]>([]);
   const [fieldMetadata, setFieldMetadata] = useState<FieldMetadata[]>([]);
   const [loading, setLoading] = useState(true);
-  const [activeSection, setActiveSection] = useState<'fields' | 'layout' | 'validation' | 'details' | 'related_lists'>('details');
+  const [activeSection, setActiveSection] = useState<'details' | 'fields' | 'layout' | 'validation'>('details');
   
   // Object search and filtering
   const [objectSearchQuery, setObjectSearchQuery] = useState('');
@@ -283,6 +289,7 @@ function SettingsManagerContent({ initialActiveMainTab = 'home' }: { initialActi
     reference_display_field: '',
   });
   const [creatingField, setCreatingField] = useState(false);
+  const [fieldError, setFieldError] = useState<string | null>(null);
   
   // Field searching
   const [fieldSearchQuery, setFieldSearchQuery] = useState('');
@@ -317,6 +324,14 @@ function SettingsManagerContent({ initialActiveMainTab = 'home' }: { initialActi
       fetchDatabaseObjects();
     }
   }, [hasAdminAccess]);
+
+  // Reset selected object when navigating to object manager tab
+  useEffect(() => {
+    if (activeMainTab === 'object_manager') {
+      setSelectedObject(null);
+      setActiveSection('details');
+    }
+  }, [activeMainTab]);
 
   useEffect(() => {
     const searchTerm = objectSearchQuery.toLowerCase();
@@ -460,23 +475,22 @@ function SettingsManagerContent({ initialActiveMainTab = 'home' }: { initialActi
       console.log('Table created successfully');
 
       // Create tab if requested
-      if (newObject.create_tab) {
-        console.log('Creating navigation tab');
-        const { error: tabError } = await supabase
-          .from('tabs')
-          .insert([{
+      const { error: tabError } = await supabase
+        .from('tabs')
+        .insert([
+          {
             name: newObject.label,
             description: `Tab for ${newObject.label} object`,
-            is_visible: true,
+            is_visible: !!newObject.create_tab, // true if checked, false if not
             api_name: newObject.api_name
-          }]);
+          }
+        ]);
 
-        if (tabError) {
-          console.error('Error creating tab:', tabError);
-          // Continue even if tab creation fails
-        } else {
-          console.log('Tab created successfully');
-        }
+      if (tabError) {
+        console.error('Error creating tab:', tabError);
+        // Continue even if tab creation fails
+      } else {
+        console.log('Tab created successfully');
       }
 
       // After creating the table, sync its metadata
@@ -582,118 +596,61 @@ function SettingsManagerContent({ initialActiveMainTab = 'home' }: { initialActi
 
   const handleCreateField = async () => {
     if (!selectedObject) {
-      setMessage('❌ Please select an object first.');
+      setFieldError('❌ Please select an object first.');
       return;
     }
     if (!newField.api_name.trim() || !newField.display_label.trim()) {
-      setMessage('❌ Display Label and API Name are required.');
+      setFieldError('❌ Display Label and API Name are required.');
       return;
     }
     if (!/^[a-z][a-z0-9_]*$/.test(newField.api_name)) {
-      setMessage('❌ API Name must start with a letter and contain only lowercase letters, numbers, and underscores.');
+      setFieldError('❌ API Name must start with a letter and contain only lowercase letters, numbers, and underscores.');
       return;
     }
 
+    // Validate reference field requirements
+    if (newField.field_type === 'reference') {
+      if (!newField.reference_table || newField.reference_table.trim() === '') {
+        setFieldError('❌ Please select a reference object for reference fields.');
+        return;
+      }
+    }
+
     setCreatingField(true);
-    setMessage('');
+    setFieldError(null);
 
     try {
       const { error } = await supabase.rpc('create_field_and_metadata', {
         p_api_name: newField.api_name,
-        p_default_value: newField.default_value === '' ? null : newField.default_value,
         p_display_label: newField.display_label,
-        p_display_order: newField.display_order,
         p_field_type: newField.field_type,
-        p_is_nullable: newField.is_nullable,
+        p_table_name: selectedObject,
         p_is_required: newField.is_required,
+        p_is_nullable: newField.is_nullable,
         p_is_system_field: false,
         p_is_visible: true,
-        p_reference_display_field: newField.field_type === 'reference' && newField.reference_display_field !== '' ? newField.reference_display_field : null,
-        p_reference_table: newField.field_type === 'reference' && newField.reference_table !== '' ? newField.reference_table : null,
         p_section: newField.section,
-        p_table_name: selectedObject,
-        p_validation_rules: newField.validation_rules,
         p_width: newField.width,
+        p_default_value: newField.default_value === '' ? null : newField.default_value,
+        p_display_order: newField.display_order,
+        p_reference_table: newField.field_type === 'reference' && newField.reference_table !== '' ? newField.reference_table : null,
+        p_validation_rules: newField.validation_rules,
       });
 
       if (error) {
         throw error;
       }
 
-      setMessage(`✅ Field '${newField.display_label}' created successfully!`);
+      // Don't show toast for field creation success, just close modal
       setShowCreateField(false);
       resetNewField();
+      setFieldError(null);
       fetchFieldMetadata(selectedObject); // Refresh fields for selected object
     } catch (err: any) {
-      console.error('❌ Error creating field:', err);
-      setMessage(`❌ Error creating field: ${err.message || 'An unexpected error occurred'}`);
+      logError('creating field', err, { fieldData: newField });
+      setFieldError(`❌ Error creating field: ${formatErrorMessage(err)}`);
     } finally {
       setCreatingField(false);
-    }
-  };
-
-  const handleUpdateField = async () => {
-    if (!editingField) return;
-
-    setSaving(true); // Using 'saving' state for field edits as well
-    setMessage('');
-
-    try {
-      const { error } = await supabase.rpc('update_field_metadata', {
-        default_value_param: editingField.default_value === '' ? null : editingField.default_value,
-        display_label_param: editingField.display_label,
-        field_id_param: editingField.id,
-        field_type_param: editingField.field_type,
-        is_nullable_param: !editingField.is_required,
-        is_required_param: editingField.is_required,
-        is_system_field_param: editingField.is_system_field,
-        is_visible_param: editingField.is_visible,
-        reference_display_field_param: editingField.field_type === 'reference' && editingField.reference_display_field !== '' ? editingField.reference_display_field : null,
-        reference_table_param: editingField.field_type === 'reference' && editingField.reference_table !== '' ? editingField.reference_table : null,
-        section_param: editingField.section,
-        width_param: editingField.width,
-      });
-
-      if (error) {
-        throw error;
-      }
-
-      setMessage(`✅ Field '${editingField.display_label}' updated successfully!`);
-      setShowEditFieldModal(false);
-      setEditingField(null);
-      fetchFieldMetadata(selectedObject!); // Refresh fields
-    } catch (err: any) {
-      console.error('❌ Error updating field:', err);
-      setMessage(`❌ Error updating field: ${err.message || 'An unexpected error occurred'}`);
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  const handleDeleteField = async (fieldId: string, apiName: string) => {
-    if (!selectedObject) return;
-    if (confirm(`Are you sure you want to delete the field '${apiName}'? This action cannot be undone.`)) {
-      setSaving(true);
-      setMessage('');
-      try {
-        const { error } = await supabase.rpc('delete_field_and_column', {
-          table_name_param: selectedObject,
-          field_id_param: fieldId,
-          api_name_param: apiName,
-        });
-
-        if (error) {
-          throw error;
-        }
-
-        setMessage(`✅ Field '${apiName}' deleted successfully!`);
-        fetchFieldMetadata(selectedObject); // Refresh fields
-      } catch (err: any) {
-        console.error('❌ Error deleting field:', err);
-        setMessage(`❌ Error deleting field: ${err.message || 'An unexpected error occurred'}`);
-      } finally {
-        setSaving(false);
-      }
     }
   };
 
@@ -703,1294 +660,688 @@ function SettingsManagerContent({ initialActiveMainTab = 'home' }: { initialActi
       display_label: '',
       field_type: 'text',
       is_required: false,
-      is_nullable: true, // Default to nullable
+      is_nullable: true,
       default_value: '',
-      validation_rules: [], // Added validation_rules
-      display_order: 0, // Added display_order
-      section: '', // Changed from 'details' to empty string
+      validation_rules: [],
+      display_order: 0,
+      section: '',
       width: 'half',
       reference_table: '',
       reference_display_field: '',
     });
   };
 
-  const handleEditField = (field: FieldMetadata) => {
-    setEditingField(field);
-    setShowEditFieldModal(true);
-  };
-
-  const getObjectIcon = (objectName: string) => {
-    switch (objectName) {
-      case 'clients': return '👤';
-      case 'channel_partners': return '🤝';
-      case 'billing': return '💰';
-      case 'users': return '👥';
-      default: return '📦';
-    }
-  };
-
-  const isSystemObject = (objectName: string) => {
-    const systemObjects = ['clients', 'channel_partners', 'billing', 'users', 'field_metadata', 'roles', 'permissions', 'profiles'];
-    return systemObjects.includes(objectName);
-  };
-
-  const handleUpdateFieldProperty = (fieldId: string, property: keyof FieldMetadata, value: any) => {
-    setFieldMetadata(prev => prev.map(field => 
-      field.id === fieldId ? { ...field, [property]: value } : field
-    ));
-  };
-
-  const getFieldIcon = (dataType: string, isReference: boolean = false) => {
-    if (isReference) return '🔗';
-    switch (dataType) {
-      case 'text': return '📄';
-      case 'varchar': return '📝';
-      case 'integer': return '🔢';
-      case 'decimal': return '💰';
-      case 'boolean': return '✔️';
-      case 'date': return '📅';
-      case 'timestamptz': return '⏰';
-      case 'uuid': return '🆔';
-      case 'jsonb': return '{} ';
-      default: return '❓';
-    }
-  };
-
-  const handleCreateValidationRule = async () => {
-    if (!selectedObject) {
-      setMessage('❌ Please select an object first.');
-      return;
-    }
-    if (!newRule.field || !newRule.type || !newRule.message) {
-      setMessage('❌ Field, Rule Type, and Error Message are required.');
-      return;
-    }
-
-    setCreatingRule(true);
-    setMessage('');
-
-    try {
-      // This is a client-side only array for now. In a real app, this would be stored in DB.
-      // For demonstration, we'll just add it to the state.
-      setValidationRules(prev => [...prev, { ...newRule, id: Date.now().toString() }]);
-      setMessage(`✅ Validation rule for '${newRule.field}' created successfully!`);
-      setShowCreateRule(false);
-      setNewRule({ field: '', type: 'required', value: '', message: '', enabled: true });
-    } catch (err: any) {
-      console.error('❌ Error creating validation rule:', err);
-      setMessage(`❌ Error creating validation rule: ${err.message || 'An unexpected error occurred'}`);
-    } finally {
-      setCreatingRule(false);
-    }
-  };
-
-  const filteredFields = fieldMetadata.filter(field =>
-    field.display_label.toLowerCase().includes(fieldSearchQuery.toLowerCase()) ||
-    field.api_name.toLowerCase().includes(fieldSearchQuery.toLowerCase())
-  );
-
-  // Tab management handlers
-  const handleCreateTab = async () => {
-    if (!newTab.name.trim()) {
-      setMessage('❌ Tab name is required');
-      return;
-    }
-
-    try {
-      const { data, error } = await supabase
-        .from('tabs')
-        .insert([{ name: newTab.name, description: newTab.description, is_visible: newTab.is_visible }])
-        .select();
-
-      if (error) throw error;
-
-      setTabs([...tabs, data[0]]);
-      setShowCreateTab(false);
-      setNewTab({ name: '', description: '', is_visible: true });
-      setMessage('✅ Tab created successfully!');
-    } catch (err: any) {
-      console.error('Error creating tab:', err);
-      setMessage(`❌ Error creating tab: ${err.message}`);
-    }
-  };
-
-  const handleEditTab = (tab: { id: string; name: string; description: string; is_visible: boolean }) => {
-    setEditingTab(tab);
-    setNewTab({ name: tab.name, description: tab.description, is_visible: tab.is_visible });
-    setShowCreateTab(true);
-  };
-
-  const handleUpdateTab = async () => {
-    if (!editingTab || !newTab.name.trim()) {
-      setMessage('❌ Tab name is required');
-      return;
-    }
-
-    try {
-      const { error } = await supabase
-        .from('tabs')
-        .update({
-          name: newTab.name,
-          description: newTab.description,
-          is_visible: newTab.is_visible
-        })
-        .eq('id', editingTab.id);
-
-      if (error) throw error;
-
-      setTabs(tabs.map(t => t.id === editingTab.id ? { ...t, ...newTab } : t));
-      setShowCreateTab(false);
-      setEditingTab(null);
-      setNewTab({ name: '', description: '', is_visible: true });
-      setMessage('✅ Tab updated successfully!');
-    } catch (err: any) {
-      console.error('Error updating tab:', err);
-      setMessage(`❌ Error updating tab: ${err.message}`);
-    }
-  };
-
-  const handleToggleTabVisibility = async (tabId: string, isVisible: boolean) => {
-    try {
-      const { error } = await supabase
-        .from('tabs')
-        .update({ is_visible: isVisible })
-        .eq('id', tabId);
-
-      if (error) throw error;
-
-      setTabs(tabs.map(t => t.id === tabId ? { ...t, is_visible: isVisible } : t));
-      setMessage(`✅ Tab ${isVisible ? 'shown' : 'hidden'} successfully!`);
-    } catch (err: any) {
-      console.error('Error toggling tab visibility:', err);
-      setMessage(`❌ Error toggling tab visibility: ${err.message}`);
-    }
-  };
-
-  const handleDeleteTab = async (tabId: string) => {
-    if (!confirm('Are you sure you want to delete this tab?')) return;
-
-    try {
-      const { error } = await supabase
-        .from('tabs')
-        .delete()
-        .eq('id', tabId);
-
-      if (error) throw error;
-
-      setTabs(tabs.filter(t => t.id !== tabId));
-      setMessage('✅ Tab deleted successfully!');
-    } catch (err: any) {
-      console.error('Error deleting tab:', err);
-      setMessage(`❌ Error deleting tab: ${err.message}`);
-    }
-  };
-
-  // Fetch tabs on component mount
-  useEffect(() => {
-    fetchTabs();
-  }, []);
-
-  // User management handlers
-  const handleCreateUser = async () => {
-    if (!newUser.email.trim()) {
-      setMessage('❌ Email is required');
-      return;
-    }
-
-    try {
-      const { data, error } = await supabase.auth.admin.createUser({
-        email: newUser.email,
-        password: 'password123', // Default password
-        email_confirm: true,
-        user_metadata: {
-          role: newUser.role,
-          profile_id: newUser.profile_id
-        }
-      });
-
-      if (error) throw error;
-
-      // Add the new user to the list with profile information
-      const profile = profiles.find(p => p.id === newUser.profile_id);
-      setUsers([...users, {
-        id: data.user.id,
-        email: data.user.email!,
-        role: newUser.role,
-        profile: profile ? { id: profile.id, name: profile.name } : undefined
-      }]);
-
-      setShowCreateUser(false);
-      setNewUser({ email: '', role: 'user', profile_id: null });
-      setMessage('✅ User created successfully!');
-    } catch (err: any) {
-      console.error('Error creating user:', err);
-      setMessage(`❌ Error creating user: ${err.message}`);
-    }
-  };
-
-  const handleEditUser = (user: { id: string; email: string; role: string; profile?: { id: string; name: string } }) => {
-    setEditingUser({
-      id: user.id,
-      email: user.email,
-      role: user.role,
-      profile_id: user.profile?.id || null
-    });
-    setNewUser({
-      email: user.email,
-      role: user.role,
-      profile_id: user.profile?.id || null
-    });
-    setShowCreateUser(true);
-  };
-
-  const handleUpdateUser = async () => {
-    if (!editingUser || !newUser.email.trim()) {
-      setMessage('❌ Email is required');
-      return;
-    }
-
-    try {
-      const { error } = await supabase.auth.admin.updateUserById(
-        editingUser.id,
-        {
-          email: newUser.email,
-          user_metadata: {
-            role: newUser.role,
-            profile_id: newUser.profile_id
-          }
-        }
-      );
-
-      if (error) throw error;
-
-      // Update the user in the list with profile information
-      const profile = profiles.find(p => p.id === newUser.profile_id);
-      setUsers(users.map(u => u.id === editingUser.id ? {
-        ...u,
-        email: newUser.email,
-        role: newUser.role,
-        profile: profile ? { id: profile.id, name: profile.name } : undefined
-      } : u));
-
-      setShowCreateUser(false);
-      setEditingUser(null);
-      setNewUser({ email: '', role: 'user', profile_id: null });
-      setMessage('✅ User updated successfully!');
-    } catch (err: any) {
-      console.error('Error updating user:', err);
-      setMessage(`❌ Error updating user: ${err.message}`);
-    }
-  };
-
-  const handleDeleteUser = async (userId: string) => {
-    if (!confirm('Are you sure you want to delete this user?')) return;
-
-    try {
-      const { error } = await supabase.auth.admin.deleteUser(userId);
-
-      if (error) throw error;
-
-      setUsers(users.filter(u => u.id !== userId));
-      setMessage('✅ User deleted successfully!');
-    } catch (err: any) {
-      console.error('Error deleting user:', err);
-      setMessage(`❌ Error deleting user: ${err.message}`);
-    }
-  };
-
-  // Fetch users on component mount
-  useEffect(() => {
-    const fetchUsers = async () => {
-      try {
-        const { data: usersData, error: usersError } = await supabase
-          .from('users')
-          .select('id, email, role');
-
-        if (usersError) throw usersError;
-
-        // Transform the data to include profile information
-        const transformedUsers = usersData.map(user => ({
-          id: user.id,
-          email: user.email,
-          role: user.role || 'user',
-          profile: undefined // Profile will be added later when the profile_id column is available
-        }));
-
-        setUsers(transformedUsers);
-      } catch (err: any) {
-        console.error('Error fetching users:', err);
-        setMessage(`❌ Error fetching users: ${err.message}`);
-      }
-    };
-
-    fetchUsers();
-  }, [profiles]); // Re-fetch when profiles change
-
+  // Add missing fetchRelatedLists function
   const fetchRelatedLists = async (tableName: string) => {
     try {
-      console.log('🔗 Fetching related lists for table:', tableName);
-      
-      const { data, error } = await supabase.rpc('get_related_lists', { 
-        p_parent_table: tableName 
+      const { data, error } = await supabase.rpc('get_related_lists', {
+        p_parent_table: tableName
       });
       
-      if (error) {
-        console.error('❌ Error fetching related lists:', error);
-        setRelatedLists([]);
-      } else {
-        console.log('✅ Fetched related lists:', data);
-        if (data && data.length > 0) {
-          setRelatedLists(data);
-        } else {
-          // If no configured lists, fetch suggestions
-          const { data: suggestedData, error: suggestedError } = await supabase.rpc('suggest_related_lists', {
-            p_parent: tableName
-          });
-
-          if (suggestedError) {
-            console.error('❌ Error fetching suggested related lists:', suggestedError);
-            setRelatedLists([]);
-          } else {
-            console.log('✅ Fetched suggested related lists:', suggestedData);
-            setRelatedLists(suggestedData || []);
-          }
-        }
-      }
-    } catch (err) {
-      console.error('❌ Unexpected error fetching related lists:', err);
-      setRelatedLists([]);
-    }
-  };
-
-  const handleCreateRelatedList = async () => {
-    if (!selectedObject) {
-      setMessage('❌ Please select an object first.');
-      return;
-    }
-    if (!newRelatedList.child_table || !newRelatedList.foreign_key_field || !newRelatedList.label) {
-      setMessage('❌ Child Object, Foreign Key Field, and Label are required.');
-      return;
-    }
-
-    setCreatingRelatedList(true);
-    setMessage('');
-
-    try {
-      const { data, error } = await supabase.rpc('create_related_list', {
-        p_parent_table: selectedObject,
-        p_child_table: newRelatedList.child_table,
-        p_foreign_key_field: newRelatedList.foreign_key_field,
-        p_label: newRelatedList.label,
-        p_display_columns: newRelatedList.display_columns,
-        p_section: newRelatedList.section,
-        p_display_order: relatedLists.length // Add to end of list
-      });
-
-      if (error) {
-        throw error;
-      }
-
-      setMessage(`✅ Related list '${newRelatedList.label}' created successfully!`);
-      setShowCreateRelatedList(false);
-      setNewRelatedList({
-        child_table: '',
-        foreign_key_field: '',
-        label: '',
-        display_columns: ['id', 'name'],
-        section: 'details'
-      });
-      fetchRelatedLists(selectedObject); // Refresh the list
+      if (error) throw error;
+      setRelatedLists(data || []);
     } catch (err: any) {
-      console.error('❌ Error creating related list:', err);
-      setMessage(`❌ Error creating related list: ${err.message || 'An unexpected error occurred'}`);
-    } finally {
-      setCreatingRelatedList(false);
+      logError('fetching related lists', err);
     }
   };
 
-  const handleUpdateRelatedList = async () => {
-    if (!editingRelatedList) return;
-
-    setSaving(true);
-    setMessage('');
-
-    try {
-      const { data, error } = await supabase.rpc('update_related_list', {
-        p_id: editingRelatedList.id,
-        p_label: editingRelatedList.label,
-        p_display_columns: editingRelatedList.display_columns,
-        p_section: editingRelatedList.section,
-        p_display_order: editingRelatedList.display_order,
-        p_is_visible: editingRelatedList.is_visible
-      });
-
-      if (error) {
-        throw error;
-      }
-
-      setMessage(`✅ Related list '${editingRelatedList.label}' updated successfully!`);
-      setShowEditRelatedList(false);
-      setEditingRelatedList(null);
-      fetchRelatedLists(selectedObject!); // Refresh the list
-    } catch (err: any) {
-      console.error('❌ Error updating related list:', err);
-      setMessage(`❌ Error updating related list: ${err.message || 'An unexpected error occurred'}`);
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  const handleDeleteRelatedList = async (relatedListId: string, label: string) => {
-    if (!selectedObject) return;
-    if (confirm(`Are you sure you want to delete the related list '${label}'? This action cannot be undone.`)) {
-      setSaving(true);
-      setMessage('');
-      try {
-        const { error } = await supabase.rpc('delete_related_list', {
-          p_id: relatedListId
-        });
-
-        if (error) {
-          throw error;
-        }
-
-        setMessage(`✅ Related list '${label}' deleted successfully!`);
-        fetchRelatedLists(selectedObject); // Refresh the list
-      } catch (err: any) {
-        console.error('❌ Error deleting related list:', err);
-        setMessage(`❌ Error deleting related list: ${err.message || 'An unexpected error occurred'}`);
-      } finally {
-        setSaving(false);
-      }
-    }
-  };
-
-  if (!hasAdminAccess) {
-    return (
-      <div className="min-h-screen flex items-center justify-center bg-gray-50">
-        <p className="text-xl text-gray-700">Access Denied. Only administrators can access settings.</p>
-      </div>
-    );
-  }
-
+  // Add the rest of the component JSX here
   return (
-    <div className="min-h-screen bg-gray-100 p-8">
-      <div className="max-w-7xl mx-auto">
-        {/* Removed the main Settings heading as it is redundant */}
-
-        <div className="bg-white shadow-md rounded-lg overflow-hidden">
-          {/* Main Tab Navigation */}
-          <div className="border-b border-gray-200">
-            <nav className="-mb-px flex space-x-8 px-6" aria-label="Tabs">
-              {mainSettingsTabs.map((tab) => (
-                <button
-                  key={tab.id}
-                  onClick={() => setActiveMainTab(tab.id)}
-                  className={`
-                    ${activeMainTab === tab.id
-                      ? 'border-blue-500 text-blue-600'
-                      : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'}
-                    whitespace-nowrap py-4 px-1 border-b-2 font-medium text-sm focus:outline-none`}
-                >
-                  <span>{tab.icon}</span>
-                  {tab.label}
-                </button>
-              ))}
-            </nav>
+    <div className="min-h-screen bg-gray-50">
+      {/* Header */}
+      <div className="bg-white shadow">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+          <div className="flex justify-between h-16">
+            <div className="flex">
+              <div className="flex-shrink-0 flex items-center">
+                <h1 className="text-xl font-semibold text-gray-900">Settings</h1>
+              </div>
+            </div>
           </div>
+        </div>
+      </div>
 
-          <div className="p-6">
-            {/* Home Tab Content */}
-            {activeMainTab === 'home' && (
-              <div className="flex flex-col md:flex-row gap-6">
-                {/* Left Sidebar for Home Sections */}
-                <div className="md:w-1/4 bg-gray-50 p-4 rounded-lg shadow-sm">
-                  {/* Removed the Home Sections heading as it is redundant */}
-                  <nav className="space-y-2">
-                    {homeSections.map((section) => (
-                      <button
-                        key={section.id}
-                        onClick={() => setSelectedHomeSection(section.id as any)}
-                        className={`
-                          ${selectedHomeSection === section.id
-                            ? 'bg-blue-100 text-blue-700'
-                            : 'text-gray-700 hover:bg-gray-100'
-                          } group flex items-center px-3 py-2 text-sm font-medium rounded-md w-full text-left
-                        `}
-                      >
-                        <span className="ml-3">{section.label}</span>
-                      </button>
-                    ))}
-                  </nav>
+      {/* Main Navigation Tabs */}
+      <div className="bg-white border-b border-gray-200">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+          <nav className="-mb-px flex space-x-8">
+            <button
+              onClick={() => setActiveMainTab('home')}
+              className={`whitespace-nowrap py-4 px-1 border-b-2 font-medium text-sm ${
+                activeMainTab === 'home'
+                  ? 'border-blue-500 text-blue-600'
+                  : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+              }`}
+            >
+              🏠 Home
+            </button>
+            <button
+              onClick={() => setActiveMainTab('object_manager')}
+              className={`whitespace-nowrap py-4 px-1 border-b-2 font-medium text-sm ${
+                activeMainTab === 'object_manager'
+                  ? 'border-blue-500 text-blue-600'
+                  : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+              }`}
+            >
+              📦 Object Manager
+            </button>
+          </nav>
+        </div>
+      </div>
+
+      {/* Main Content */}
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4">
+        {/* Home Tab Content */}
+        {activeMainTab === 'home' && (
+          <div className="flex gap-6">
+            {/* Sidebar with sections */}
+            <div className="w-64 bg-white rounded-lg shadow">
+              <div className="px-6 py-4 border-b border-gray-200">
+                <h2 className="text-lg font-medium text-gray-900">System Settings</h2>
+              </div>
+              <div className="p-2">
+                <nav className="space-y-1">
+                  {homeSections.map((section) => (
+                    <button
+                      key={section.id}
+                      onClick={() => setSelectedHomeSection(section.id as any)}
+                      className={`w-full text-left px-4 py-3 rounded-lg transition-colors ${
+                        selectedHomeSection === section.id
+                          ? 'bg-blue-50 text-blue-700 border border-blue-200'
+                          : 'text-gray-700 hover:bg-gray-50 hover:text-gray-900'
+                      }`}
+                    >
+                      <div className="flex items-center space-x-3">
+                        <span className="text-lg">{section.icon}</span>
+                        <span className="font-medium">{section.label}</span>
+                      </div>
+                    </button>
+                  ))}
+                </nav>
+              </div>
+            </div>
+
+            {/* Main content area */}
+            <div className="flex-1 bg-white rounded-lg shadow">
+              <div className="px-6 py-4 border-b border-gray-200">
+                <h3 className="text-lg font-medium text-gray-900">
+                  {homeSections.find(s => s.id === selectedHomeSection)?.label}
+                </h3>
+              </div>
+              <div className="p-6">
+                {selectedHomeSection === 'profile' && (
+                  <ProfileManager />
+                )}
+                {selectedHomeSection === 'users_roles' && (
+                  <UserCreator />
+                )}
+                {selectedHomeSection === 'tab_settings' && (
+                  <TabSettingsPage />
+                )}
+                {selectedHomeSection === 'permission_sets' && (
+                  <div className="text-center py-8 text-gray-500">
+                    Permission Sets management coming soon...
+                  </div>
+                )}
+                {selectedHomeSection === 'system_settings' && (
+                  <div className="text-center py-8 text-gray-500">
+                    System Settings management coming soon...
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Object Manager Tab Content */}
+        {activeMainTab === 'object_manager' && (
+          <div className="space-y-6">
+            {/* Object Manager Header */}
+            <div className="bg-white rounded-lg shadow">
+              <div className="px-6 py-4 border-b border-gray-200 flex justify-between items-center">
+                <div className="flex items-center space-x-4">
+                  <h2 className="text-lg font-medium text-gray-900">
+                    {selectedObject ? objects.find(obj => obj.table_name === selectedObject)?.label || selectedObject : ''}
+                  </h2>
                 </div>
+                {selectedObject && (
+                  <button
+                    onClick={() => {
+                      setSelectedObject(null);
+                      setActiveSection('details');
+                    }}
+                    className="inline-flex items-center px-3 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
+                  >
+                    <svg className="h-4 w-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 19l-7-7m0 0l7-7m-7 7h18" />
+                    </svg>
+                    Back to Objects
+                  </button>
+                )}
+              </div>
+            </div>
 
-                {/* Main Content for Home Sections */}
-                <div className="md:w-3/4">
-                  {selectedHomeSection === 'profile' && (
-                    <div className="bg-white p-6 rounded-lg shadow-sm">
-                      <div className="flex justify-between items-center mb-4">
-                        <h2 className="text-xl font-bold text-gray-900">Profile Settings</h2>
-                        <button
-                          onClick={() => setShowCreateProfile(true)}
-                          className="px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
-                        >
-                          Create New Profile
-                        </button>
+            {/* Content Area */}
+            {!selectedObject ? (
+              /* Object List View - Main Content */
+              <div className="bg-white rounded-lg shadow">
+                <div className="px-6 py-4 border-b border-gray-200">
+                  <div className="flex items-center justify-between">
+                    <div className="relative w-64">
+                      <input
+                        type="text"
+                        placeholder="Search objects..."
+                        value={objectSearchQuery}
+                        onChange={(e) => setObjectSearchQuery(e.target.value)}
+                        className="w-full pl-8 pr-3 py-2 border border-gray-300 rounded-md leading-5 bg-white placeholder-gray-500 focus:outline-none focus:placeholder-gray-400 focus:ring-1 focus:ring-blue-500 focus:border-blue-500 sm:text-sm"
+                      />
+                      <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+                        <svg className="h-5 w-5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+                        </svg>
                       </div>
-                      <div className="space-y-4">
-                        {/* Profile List */}
-                        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                          {profiles.map((profile) => (
-                            <div key={profile.id} className="border rounded-lg p-4 hover:shadow-md transition-shadow">
-                              <div className="flex justify-between items-start">
-                                <div>
-                                  <h3 className="font-medium text-gray-900">{profile.name}</h3>
-                                  <p className="text-sm text-gray-500">{profile.description}</p>
+                    </div>
+                    <button
+                      onClick={() => setShowCreateObject(true)}
+                      className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
+                    >
+                      + New Object
+                    </button>
+                  </div>
+                </div>
+                <div className="p-6">
+                  {loading ? (
+                    <div className="text-center py-8">
+                      <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600 mx-auto"></div>
+                      <p className="mt-2 text-gray-500">Loading objects...</p>
+                    </div>
+                  ) : filteredObjects.length === 0 ? (
+                    <div className="text-center py-8">
+                      <div className="text-gray-400 mb-4">
+                        <svg className="mx-auto h-12 w-12" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" />
+                        </svg>
+                      </div>
+                      <h3 className="text-lg font-medium text-gray-900 mb-2">No objects found</h3>
+                      <p className="text-gray-500 mb-4">
+                        {objectSearchQuery ? 'Try adjusting your search terms.' : 'Get started by creating your first object.'}
+                      </p>
+                      {!objectSearchQuery && (
+                        <button
+                          onClick={() => setShowCreateObject(true)}
+                          className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
+                        >
+                          + Create First Object
+                        </button>
+                      )}
+                    </div>
+                  ) : (
+                    <div className="space-y-3">
+                      {filteredObjects.map((obj) => (
+                        <div
+                          key={obj.table_name}
+                          onClick={() => {
+                            setSelectedObject(obj.table_name);
+                            setActiveSection('details');
+                          }}
+                          className="p-4 border border-gray-200 rounded-lg cursor-pointer transition-all hover:border-blue-300 hover:shadow-sm hover:bg-gray-50"
+                        >
+                          <div className="flex items-center justify-between">
+                            <div className="flex-1">
+                              <div className="flex items-center space-x-3">
+                                <div className="flex-shrink-0">
+                                  <div className="w-8 h-8 bg-blue-100 rounded-lg flex items-center justify-center">
+                                    <span className="text-blue-600 font-medium text-sm">
+                                      {obj.label.charAt(0).toUpperCase()}
+                                    </span>
+                                  </div>
                                 </div>
-                                <div className="flex space-x-2">
-                                  <button
-                                    onClick={() => handleEditProfile(profile)}
-                                    className="text-blue-600 hover:text-blue-800"
-                                  >
-                                    Edit
-                                  </button>
-                                  <button
-                                    onClick={() => handleDeleteProfile(profile.id)}
-                                    className="text-red-600 hover:text-red-800"
-                                  >
-                                    Delete
-                                  </button>
+                                <div className="flex-1 min-w-0">
+                                  <h4 className="text-lg font-medium text-gray-900 truncate">{obj.label}</h4>
+                                  <p className="text-sm text-gray-500 truncate">{obj.table_name}</p>
+                                  <div className="flex items-center space-x-2 text-xs text-gray-400 mt-1">
+                                    <span>{obj.table_schema}</span>
+                                    <span>•</span>
+                                    <span>{obj.table_type}</span>
+                                  </div>
                                 </div>
                               </div>
                             </div>
-                          ))}
-                        </div>
-                      </div>
-
-                      {/* Create Profile Modal */}
-                      {showCreateProfile && (
-                        <div className="fixed z-10 inset-0 overflow-y-auto" aria-labelledby="modal-title" role="dialog" aria-modal="true">
-                          <div className="flex items-center justify-center min-h-screen text-center sm:p-0">
-                            <div className="fixed inset-0 bg-gray-500 bg-opacity-75 transition-opacity" aria-hidden="true"></div>
-                            <span className="hidden sm:inline-block sm:align-middle sm:h-screen" aria-hidden="true">&#8203;</span>
-                            <div className="inline-block align-bottom bg-white rounded-lg text-left overflow-hidden shadow-xl transform transition-all sm:my-8 sm:align-middle sm:max-w-lg sm:w-full">
-                              <div className="bg-white px-4 pt-5 pb-4 sm:p-6 sm:pb-4">
-                                <div className="sm:flex sm:items-start">
-                                  <div className="mt-3 text-center sm:mt-0 sm:ml-4 sm:text-left w-full">
-                                    <h3 className="text-lg leading-6 font-medium text-gray-900" id="modal-title">
-                                      Create New Profile
-                                    </h3>
-                                    <div className="mt-2 space-y-4">
-                                      <div>
-                                        <label htmlFor="profile-name" className="block text-sm font-medium text-gray-700">Profile Name</label>
-                                        <input
-                                          type="text"
-                                          id="profile-name"
-                                          className="mt-1 focus:ring-blue-500 focus:border-blue-500 block w-full shadow-sm sm:text-sm border-gray-300 rounded-md"
-                                          value={newProfile.name}
-                                          onChange={(e) => setNewProfile({ ...newProfile, name: e.target.value })}
-                                        />
-                                      </div>
-                                      <div>
-                                        <label htmlFor="profile-description" className="block text-sm font-medium text-gray-700">Description</label>
-                                        <textarea
-                                          id="profile-description"
-                                          rows={3}
-                                          className="mt-1 focus:ring-blue-500 focus:border-blue-500 block w-full shadow-sm sm:text-sm border-gray-300 rounded-md"
-                                          value={newProfile.description}
-                                          onChange={(e) => setNewProfile({ ...newProfile, description: e.target.value })}
-                                        />
-                                      </div>
-                                    </div>
-                                  </div>
-                                </div>
-                                <div className="bg-gray-50 px-4 py-3 sm:px-6 sm:flex sm:flex-row-reverse">
-                                  <button
-                                    type="button"
-                                    className="w-full inline-flex justify-center rounded-md border border-transparent shadow-sm px-4 py-2 bg-blue-600 text-base font-medium text-white hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 sm:ml-3 sm:w-auto sm:text-sm"
-                                    onClick={handleCreateProfile}
-                                  >
-                                    Create Profile
-                                  </button>
-                                  <button
-                                    type="button"
-                                    className="mt-3 w-full inline-flex justify-center rounded-md border border-gray-300 shadow-sm px-4 py-2 bg-white text-base font-medium text-gray-700 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 sm:mt-0 sm:ml-3 sm:w-auto sm:text-sm"
-                                    onClick={() => setShowCreateProfile(false)}
-                                  >
-                                    Cancel
-                                  </button>
-                                </div>
+                            <div className="flex items-center space-x-2">
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleDeleteObject(obj.table_name);
+                                }}
+                                className="text-red-600 hover:text-red-800 p-2 rounded-md hover:bg-red-50 transition-colors"
+                                title="Delete object"
+                              >
+                                <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                                </svg>
+                              </button>
+                              <div className="text-gray-400">
+                                <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                                </svg>
                               </div>
                             </div>
                           </div>
                         </div>
-                      )}
-                    </div>
-                  )}
-                  {selectedHomeSection === 'users_roles' && (
-                    <div className="bg-white p-6 rounded-lg shadow-sm">
-                      <div className="flex justify-between items-center mb-4">
-                        <h2 className="text-xl font-bold text-gray-900">Users & Roles</h2>
-                        <button
-                          onClick={() => setShowCreateUser(true)}
-                          className="px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
-                        >
-                          Create New User
-                        </button>
-                      </div>
-                      <div className="space-y-4">
-                        {/* User List */}
-                        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                          {users.map((user) => (
-                            <div key={user.id} className="border rounded-lg p-4 hover:shadow-md transition-shadow">
-                              <div className="flex justify-between items-start">
-                                <div>
-                                  <h3 className="font-medium text-gray-900">{user.email}</h3>
-                                  <p className="text-sm text-gray-500">Role: {user.role}</p>
-                                  <p className="text-sm text-gray-500">Profile: {user.profile?.name || 'None'}</p>
-                                </div>
-                                <div className="flex space-x-2">
-                                  <button
-                                    onClick={() => handleEditUser(user)}
-                                    className="text-blue-600 hover:text-blue-800"
-                                  >
-                                    Edit
-                                  </button>
-                                  <button
-                                    onClick={() => handleDeleteUser(user.id)}
-                                    className="text-red-600 hover:text-red-800"
-                                  >
-                                    Delete
-                                  </button>
-                                </div>
-                              </div>
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-
-                      {/* Create Tab Modal */}
-                      {showCreateTab && (
-                        <div className="fixed z-10 inset-0 overflow-y-auto" aria-labelledby="modal-title" role="dialog" aria-modal="true">
-                          <div className="flex items-center justify-center min-h-screen text-center sm:p-0">
-                            <div className="fixed inset-0 bg-gray-500 bg-opacity-75 transition-opacity" aria-hidden="true"></div>
-                            <span className="hidden sm:inline-block sm:align-middle sm:h-screen" aria-hidden="true">&#8203;</span>
-                            <div className="inline-block align-bottom bg-white rounded-lg text-left overflow-hidden shadow-xl transform transition-all sm:my-8 sm:align-middle sm:max-w-lg sm:w-full">
-                              <div className="bg-white px-4 pt-5 pb-4 sm:p-6 sm:pb-4">
-                                <div className="sm:flex sm:items-start">
-                                  <div className="mt-3 text-center sm:mt-0 sm:ml-4 sm:text-left w-full">
-                                    <h3 className="text-lg leading-6 font-medium text-gray-900" id="modal-title">
-                                      {editingTab ? 'Edit Tab' : 'Create New Tab'}
-                                    </h3>
-                                    <div className="mt-2 space-y-4">
-                                      <div>
-                                        <label htmlFor="tab-name" className="block text-sm font-medium text-gray-700">Tab Name</label>
-                                        <input
-                                          type="text"
-                                          id="tab-name"
-                                          className="mt-1 focus:ring-blue-500 focus:border-blue-500 block w-full shadow-sm sm:text-sm border-gray-300 rounded-md"
-                                          value={newTab.name}
-                                          onChange={(e) => setNewTab({ ...newTab, name: e.target.value })}
-                                        />
-                                      </div>
-                                      <div>
-                                        <label htmlFor="tab-description" className="block text-sm font-medium text-gray-700">Description</label>
-                                        <textarea
-                                          id="tab-description"
-                                          rows={3}
-                                          className="mt-1 focus:ring-blue-500 focus:border-blue-500 block w-full shadow-sm sm:text-sm border-gray-300 rounded-md"
-                                          value={newTab.description}
-                                          onChange={(e) => setNewTab({ ...newTab, description: e.target.value })}
-                                        />
-                                      </div>
-                                      <div>
-                                        <label className="flex items-center">
-                                          <input
-                                            type="checkbox"
-                                            className="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded"
-                                            checked={newTab.is_visible}
-                                            onChange={(e) => setNewTab({ ...newTab, is_visible: e.target.checked })}
-                                          />
-                                          <span className="ml-2 text-sm text-gray-700">Visible by default</span>
-                                        </label>
-                                      </div>
-                                    </div>
-                                  </div>
-                                </div>
-                                <div className="bg-gray-50 px-4 py-3 sm:px-6 sm:flex sm:flex-row-reverse">
-                                  <button
-                                    type="button"
-                                    className="w-full inline-flex justify-center rounded-md border border-transparent shadow-sm px-4 py-2 bg-blue-600 text-base font-medium text-white hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 sm:ml-3 sm:w-auto sm:text-sm"
-                                    onClick={editingTab ? handleUpdateTab : handleCreateTab}
-                                  >
-                                    {editingTab ? 'Update Tab' : 'Create Tab'}
-                                  </button>
-                                  <button
-                                    type="button"
-                                    className="mt-3 w-full inline-flex justify-center rounded-md border border-gray-300 shadow-sm px-4 py-2 bg-white text-base font-medium text-gray-700 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 sm:mt-0 sm:ml-3 sm:w-auto sm:text-sm"
-                                    onClick={() => {
-                                      setShowCreateTab(false);
-                                      setEditingTab(null);
-                                      setNewTab({ name: '', description: '', is_visible: true });
-                                    }}
-                                  >
-                                    Cancel
-                                  </button>
-                                </div>
-                              </div>
-                            </div>
-                          </div>
-                        </div>
-                      )}
-                    </div>
-                  )}
-                  {selectedHomeSection === 'system_settings' && (
-                    <div className="bg-white p-6 rounded-lg shadow-sm">
-                      <h2 className="text-xl font-bold text-gray-900 mb-4">System Settings</h2>
-                      <p>Access various system-wide configurations.</p>
-                      {/* Add actual system settings component here */}
+                      ))}
                     </div>
                   )}
                 </div>
               </div>
-            )}
-
-            {/* Object Manager Tab Content */}
-            {activeMainTab === 'object_manager' && (
-              <div className="flex flex-col md:flex-row gap-6">
-                {selectedObject && (
-                  <div className="md:w-1/4 bg-gray-50 p-4 rounded-lg shadow-sm">
-                    <nav className="space-y-2">
-                      {/* Removed the 'Object Details' button as it is redundant and the content is directly displayed when no object is selected. */}
-                      {/* The 'Object Manager' heading/tab is also removed from here as it's handled by the main tab navigation. */}
-                      <>
-                        <button
-                          onClick={() => setActiveSection('details')}
-                          className={`
-                            ${activeSection === 'details'
-                              ? 'bg-blue-100 text-blue-700'
-                              : 'text-gray-700 hover:bg-gray-100'
-                            } group flex items-center px-3 py-2 text-sm font-medium rounded-md w-full text-left
-                          `}
-                        >
-                          <span className="mr-3">📄</span> Details
-                        </button>
-                        <button
-                          onClick={() => setActiveSection('fields')}
-                          className={`
-                            ${activeSection === 'fields'
-                              ? 'bg-blue-100 text-blue-700'
-                              : 'text-gray-700 hover:bg-gray-100'
-                            } group flex items-center px-3 py-2 text-sm font-medium rounded-md w-full text-left
-                          `}
-                        >
-                          <span className="mr-3">➕</span> Fields
-                        </button>
-                        <button
-                          onClick={() => setActiveSection('layout')}
-                          className={`
-                            ${activeSection === 'layout'
-                              ? 'bg-blue-100 text-blue-700'
-                              : 'text-gray-700 hover:bg-gray-100'
-                            } group flex items-center px-3 py-2 text-sm font-medium rounded-md w-full text-left
-                          `}
-                        >
-                          <span className="mr-3">📝</span> Page Layout
-                        </button>
-                        <button
-                          onClick={() => setActiveSection('validation')}
-                          className={`
-                            ${activeSection === 'validation'
-                              ? 'bg-blue-100 text-blue-700'
-                              : 'text-gray-700 hover:bg-gray-100'
-                            } group flex items-center px-3 py-2 text-sm font-medium rounded-md w-full text-left
-                          `}
-                        >
-                          <span className="mr-3">✅</span> Validation Rules
-                        </button>
-                        <button
-                          onClick={() => setActiveSection('related_lists')}
-                          className={`
-                            ${activeSection === 'related_lists'
-                              ? 'bg-blue-100 text-blue-700'
-                              : 'text-gray-700 hover:bg-gray-100'
-                            } group flex items-center px-3 py-2 text-sm font-medium rounded-md w-full text-left
-                          `}
-                        >
-                          <span className="mr-3">🔗</span> Related Lists
-                        </button>
-                      </>
-                    </nav>
+            ) : (
+              /* Two Panel Layout: Sections | Content */
+              <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                {/* Panel 1: Object Sections */}
+                <div className="lg:col-span-1">
+                  <div className="bg-white rounded-lg shadow">
+                    <div className="px-6 py-4 border-b border-gray-200">
+                      {/* Removed edit (pencil) icon and object name here to avoid repetition */}
+                    </div>
+                    <div className="p-2">
+                      <nav className="space-y-1">
+                        {objectManagerSections.map((section) => (
+                          <button
+                            key={section.id}
+                            onClick={() => setActiveSection(section.id as any)}
+                            className={`w-full text-left px-4 py-3 rounded-lg transition-colors ${
+                              activeSection === section.id
+                                ? 'bg-blue-50 text-blue-700 border border-blue-200'
+                                : 'text-gray-700 hover:bg-gray-50 hover:text-gray-900'
+                            }`}
+                          >
+                            <div className="flex items-center space-x-3">
+                              <span className="text-lg">{section.icon}</span>
+                              <span className="font-medium">{section.label}</span>
+                            </div>
+                          </button>
+                        ))}
+                      </nav>
+                    </div>
                   </div>
-                )}
+                </div>
 
-                {/* Main Content for Object Manager Sections */}
-                <div className={`md:w-${selectedObject ? '3/4' : 'full'}`}>
-                  {!selectedObject ? (
-                    <div className="bg-white p-6 rounded-lg shadow-sm">
-                      {/* Removed the 'Select an Object' heading as it is redundant */}
-                      <div className="flex justify-between items-center mb-6">
-                        <div>
-                        </div>
-                        <button
-                          onClick={() => setShowCreateObject(true)}
-                          className="px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-green-600 hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-green-500"
-                        >
-                          Create New Object
-                        </button>
-                      </div>
-
-                      {/* Search Bar */}
-                      <div className="mb-6">
-                        <div className="relative">
-                          <input
-                            type="text"
-                            placeholder="Search objects..."
-                            className="w-full px-4 py-2 pl-10 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                            value={objectSearchQuery}
-                            onChange={(e) => setObjectSearchQuery(e.target.value)}
-                          />
-                          <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
-                            <svg className="h-5 w-5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
-                            </svg>
-                          </div>
-                        </div>
-                      </div>
-                      
-                      {/* Object List Table */}
-                      <div className="overflow-x-auto">
-                        <table className="min-w-full divide-y divide-gray-200">
-                          <thead className="bg-gray-50">
-                            <tr>
-                              <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Name</th>
-                              <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">API Name</th>
-                              <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Type</th>
-                              <th scope="col" className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider"></th>
-                            </tr>
-                          </thead>
-                          <tbody className="bg-white divide-y divide-gray-200">
-                            {filteredObjects.map((obj) => (
-                              <tr key={obj.table_name}>
-                                <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">
-                                  <div className="flex items-center">
-                                    <span className="mr-2 text-lg">{getObjectIcon(obj.table_name)}</span>
-                                    <button
-                                      onClick={() => setSelectedObject(obj.table_name)}
-                                      className="text-blue-600 hover:text-blue-900"
-                                    >
-                                      {obj.label || obj.table_name}
-                                    </button>
-                                    {isSystemObject(obj.table_name) && (
-                                      <span className="ml-2 inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-800">
-                                        System Object
-                                      </span>
-                                    )}
-                                  </div>
-                                </td>
-                                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{obj.table_name}</td>
-                                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{obj.table_type}</td>
-                                <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
-                                </td>
-                              </tr>
-                            ))}
-                          </tbody>
-                        </table>
+                {/* Panel 2: Content Area */}
+                <div className="lg:col-span-2">
+                  <div className="bg-white rounded-lg shadow">
+                    <div className="px-6 py-4 border-b border-gray-200">
+                      <div className="flex items-center justify-between">
+                        {/* Removed section headline from content area */}
+                        {/* Remove + New Field button from here, move to fields tab search row */}
                       </div>
                     </div>
-                  ) : (
-                    // Selected Object View (Details, Fields, Layout, Validation)
-                    <div className="bg-white p-6 rounded-lg shadow-sm">
-                      {/* Object Header */}
-                      <div className="flex items-center justify-between mb-6">
-                        <h2 className="text-2xl font-bold text-gray-900">{selectedObject.charAt(0).toUpperCase() + selectedObject.slice(1)}</h2>
-                        <div className="flex items-center gap-4">
-                          <button
-                            onClick={() => setSelectedObject(null)}
-                            className="text-blue-600 hover:text-blue-800 text-sm font-medium flex items-center"
-                          >
-                            <svg className="h-4 w-4 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
-                            </svg>
-                            Back to All Objects
-                          </button>
-                        </div>
-                      </div>
 
-                      {/* Details View */}
+                    {/* Section Content */}
+                    <div className="p-6">
                       {activeSection === 'details' && (
-                        <div>
-                          {!isEditingObject ? (
-                            <>
-                              <h3 className="text-lg font-bold text-gray-900 mb-4">Object Details</h3>
-                              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
-                                <div className="bg-gray-50 p-4 rounded-lg">
-                                  <label className="text-sm font-medium text-gray-500">Label</label>
-                                  <p className="text-lg text-gray-900">
-                                    {objects.find(o => o.table_name === selectedObject)?.label || (selectedObject.charAt(0).toUpperCase() + selectedObject.slice(1))}
-                                  </p>
-                                </div>
-                                <div className="bg-gray-50 p-4 rounded-lg">
-                                  <label className="text-sm font-medium text-gray-500">API Name</label>
-                                  <p className="text-lg text-gray-900">{selectedObject}</p>
-                                </div>
-                              </div>
-                              <div className="flex items-center gap-4">
-                                <button
-                                  onClick={() => {
-                                    const currentObject = objects.find(o => o.table_name === selectedObject);
-                                    const currentLabel = currentObject?.label || (selectedObject.charAt(0).toUpperCase() + selectedObject.slice(1));
-                                    setEditingObjectLabel(currentLabel);
-                                    setIsEditingObject(true);
-                                  }}
-                                  className="px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-blue-600 hover:bg-blue-700"
-                                >
-                                  Edit Label
-                                </button>
-                                <button
-                                    onClick={() => handleDeleteObject(selectedObject)}
-                                    className="text-red-600 hover:text-red-800 text-sm font-medium flex items-center"
-                                  >
-                                    <svg className="h-4 w-4 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
-                                    Archive Object
-                                  </button>
-                              </div>
-                            </>
-                          ) : (
-                            <>
-                              <h3 className="text-lg font-bold text-gray-900 mb-4">Edit Details</h3>
-                              <div className="space-y-4">
+                        <div className="space-y-6">
+                          <div>
+                            <h4 className="text-lg font-medium text-gray-900 mb-4">Object Information</h4>
+                            <div className="bg-gray-50 rounded-lg p-4">
+                              <dl className="grid grid-cols-1 gap-x-4 gap-y-6 sm:grid-cols-2">
                                 <div>
-                                  <label htmlFor="object-label" className="block text-sm font-medium text-gray-700">Label</label>
-                                  <input
-                                    type="text"
-                                    id="object-label"
-                                    className="mt-1 focus:ring-blue-500 focus:border-blue-500 block w-full shadow-sm sm:text-sm border-gray-300 rounded-md"
-                                    value={editingObjectLabel}
-                                    onChange={(e) => setEditingObjectLabel(e.target.value)}
-                                  />
+                                  <dt className="text-sm font-medium text-gray-500">Object Label</dt>
+                                  <dd className="mt-1 text-sm text-gray-900">
+                                    {objects.find(obj => obj.table_name === selectedObject)?.label || 'N/A'}
+                                  </dd>
                                 </div>
                                 <div>
-                                  <label htmlFor="object-api-name" className="block text-sm font-medium text-gray-700">API Name</label>
-                                  <input
-                                    type="text"
-                                    id="object-api-name"
-                                    className="mt-1 block w-full shadow-sm sm:text-sm border-gray-300 rounded-md bg-gray-100"
-                                    value={selectedObject}
-                                    disabled
-                                  />
-                                  <p className="mt-1 text-sm text-gray-500">The API Name is the database table name and cannot be changed.</p>
+                                  <dt className="text-sm font-medium text-gray-500">API Name</dt>
+                                  <dd className="mt-1 text-sm text-gray-900">{selectedObject}</dd>
                                 </div>
-                              </div>
-                              <div className="flex items-center gap-4 mt-6">
-                                <button
-                                  onClick={handleSaveObjectLabel}
-                                  disabled={saving}
-                                  className="px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-blue-600 hover:bg-blue-700 disabled:bg-gray-400"
-                                >
-                                  {saving ? 'Saving...' : 'Save'}
-                                </button>
-                                <button
-                                  onClick={() => setIsEditingObject(false)}
-                                  className="px-4 py-2 border border-gray-300 text-sm font-medium rounded-md shadow-sm text-gray-700 bg-white hover:bg-gray-50"
-                                >
-                                  Cancel
-                                </button>
-                              </div>
-                            </>
-                          )}
+                                <div>
+                                  <dt className="text-sm font-medium text-gray-500">Table Schema</dt>
+                                  <dd className="mt-1 text-sm text-gray-900">
+                                    {objects.find(obj => obj.table_name === selectedObject)?.table_schema || 'public'}
+                                  </dd>
+                                </div>
+                                <div>
+                                  <dt className="text-sm font-medium text-gray-500">Table Type</dt>
+                                  <dd className="mt-1 text-sm text-gray-900">
+                                    {objects.find(obj => obj.table_name === selectedObject)?.table_type || 'BASE TABLE'}
+                                  </dd>
+                                </div>
+                              </dl>
+                            </div>
                           </div>
+                          
+                          <div>
+                            <h4 className="text-lg font-medium text-gray-900 mb-4">Quick Stats</h4>
+                            <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+                              <div className="bg-blue-50 rounded-lg p-4">
+                                <div className="text-2xl font-bold text-blue-600">{fieldMetadata.length}</div>
+                                <div className="text-sm text-blue-700">Total Fields</div>
+                              </div>
+                              <div className="bg-green-50 rounded-lg p-4">
+                                <div className="text-2xl font-bold text-green-600">
+                                  {fieldMetadata.filter(f => f.is_visible).length}
+                                </div>
+                                <div className="text-sm text-green-700">Visible Fields</div>
+                              </div>
+                              <div className="bg-purple-50 rounded-lg p-4">
+                                <div className="text-2xl font-bold text-purple-600">{relatedLists.length}</div>
+                                <div className="text-sm text-purple-700">Related Lists</div>
+                              </div>
+                            </div>
+                          </div>
+                        </div>
                       )}
-
-                      {/* Fields List */}
+                      
                       {activeSection === 'fields' && (
                         <div className="space-y-4">
-                          <div className="flex justify-between items-center">
-                            <h3 className="text-lg font-bold text-gray-900">Fields</h3>
+                          <div className="flex items-center justify-between gap-2">
+                            <div className="relative flex-1">
+                              <input
+                                type="text"
+                                placeholder="Search fields..."
+                                value={fieldSearchQuery}
+                                onChange={(e) => setFieldSearchQuery(e.target.value)}
+                                className="w-full pl-8 pr-3 py-2 border border-gray-300 rounded-md leading-5 bg-white placeholder-gray-500 focus:outline-none focus:placeholder-gray-400 focus:ring-1 focus:ring-blue-500 focus:border-blue-500 sm:text-sm"
+                              />
+                              <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+                                <svg className="h-5 w-5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+                                </svg>
+                              </div>
+                            </div>
                             <button
                               onClick={() => setShowCreateField(true)}
-                              className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-green-600 hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-green-500"
+                              className="ml-2 inline-flex items-center px-3 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
                             >
-                              New Field
+                              + New Field
                             </button>
                           </div>
-
-                          <div className="space-y-4">
-                            {filteredFields.map((field) => (
-                              <div key={field.id} className="bg-white border border-gray-200 rounded-lg p-4">
-                                <div className="flex items-center justify-between">
+                          <div className="space-y-2">
+                            {fieldMetadata
+                              .filter(field => 
+                                fieldSearchQuery === '' || 
+                                field.display_label.toLowerCase().includes(fieldSearchQuery.toLowerCase()) ||
+                                field.api_name.toLowerCase().includes(fieldSearchQuery.toLowerCase())
+                              )
+                              .map((field) => (
+                                <div key={field.id} className="flex items-center justify-between p-3 border border-gray-200 rounded-lg">
                                   <div className="flex items-center space-x-3">
-                                    <span className="text-xl">{getFieldIcon(field.field_type, !!field.reference_table)}</span>
+                                    <span className="text-lg">
+                                      {field.reference_table ? '🔗' : 
+                                        field.field_type === 'text' ? '📝' :
+                                        field.field_type === 'integer' ? '🔢' :
+                                        field.field_type === 'boolean' ? '✅' :
+                                        field.field_type === 'date' ? '📅' :
+                                        field.field_type === 'timestamptz' ? '⏰' :
+                                        field.field_type === 'uuid' ? '🆔' :
+                                        field.field_type === 'jsonb' ? '📄' : '📝'
+                                      }
+                                    </span>
                                     <div>
-                                      <div className="flex items-center space-x-2">
-                                        <h4 className="text-sm font-medium text-gray-900">{field.display_label}</h4>
-                                        {field.is_system_field && (
-                                          <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-800">
-                                            System
-                                          </span>
-                                        )}
-                                      </div>
-                                      <p className="text-sm text-gray-500">{field.api_name}</p>
+                                      <div className="font-medium text-gray-900">{field.display_label}</div>
+                                      <div className="text-sm text-gray-500">{field.api_name}</div>
                                     </div>
                                   </div>
                                   <div className="flex items-center space-x-2">
-                                    {!field.is_system_field && (
-                                      <>
-                                        <button
-                                          onClick={() => handleEditField(field)}
-                                          className="text-gray-400 hover:text-gray-500"
-                                          title="Edit field"
-                                        >
-                                          <svg className="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" />
-                                          </svg>
-                                        </button>
-                                        <button
-                                          onClick={() => handleDeleteField(field.id, field.api_name)}
-                                          className="text-red-400 hover:text-red-500 disabled:text-gray-300"
-                                          title="Delete field"
-                                          disabled={saving}
-                                        >
-                                          <svg className="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-                                          </svg>
-                                        </button>
-                                      </>
+                                    {field.is_required && (
+                                      <span className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-red-100 text-red-800">
+                                        Required
+                                      </span>
                                     )}
+                                    {field.is_system_field && (
+                                      <span className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-gray-100 text-gray-800">
+                                        System
+                                      </span>
+                                    )}
+                                    <button
+                                      onClick={() => {
+                                        setEditingField(field);
+                                        setShowEditFieldModal(true);
+                                      }}
+                                      className="text-blue-600 hover:text-blue-800"
+                                    >
+                                      <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                                      </svg>
+                                    </button>
                                   </div>
                                 </div>
-                              </div>
-                            ))}
+                              ))}
                           </div>
                         </div>
                       )}
-
-                      {/* Page Layout View */}
+                      
                       {activeSection === 'layout' && (
                         <ObjectLayoutEditor
                           selectedObject={selectedObject}
                           fieldMetadata={fieldMetadata}
                           relatedLists={relatedLists}
-                          onLayoutChange={() => {
-                            fetchFieldMetadata(selectedObject!);
-                            fetchRelatedLists(selectedObject!);
+                          onLayoutChange={() => fetchFieldMetadata(selectedObject)}
+                          getFieldIcon={(dataType: string, isReference?: boolean) => {
+                            if (isReference) return '🔗';
+                            switch (dataType) {
+                              case 'text': return '📝';
+                              case 'integer': return '🔢';
+                              case 'boolean': return '✅';
+                              case 'date': return '📅';
+                              case 'timestamptz': return '⏰';
+                              case 'uuid': return '🆔';
+                              case 'jsonb': return '📄';
+                              default: return '📝';
+                            }
                           }}
-                          getFieldIcon={getFieldIcon}
-                          handleEditField={handleEditField}
-                          isSystemField={(apiName) => fieldMetadata.find(f => f.api_name === apiName)?.is_system_field || false}
-                          onEditRelatedList={(list) => {
-                            setEditingRelatedList(list);
+                          handleEditField={(field) => {
+                            setEditingField(field);
+                            setShowEditFieldModal(true);
+                          }}
+                          isSystemField={(apiName) => {
+                            return fieldMetadata.find(f => f.api_name === apiName)?.is_system_field || false;
+                          }}
+                          onEditRelatedList={(relatedList) => {
+                            setEditingRelatedList(relatedList);
                             setShowEditRelatedList(true);
                           }}
-                          onDeleteRelatedList={handleDeleteRelatedList}
-                          onAddRelatedList={() => setShowCreateRelatedList(true)}
+                          onDeleteRelatedList={(relatedListId, label) => {
+                            if (confirm(`Are you sure you want to delete the related list "${label}"?`)) {
+                              // Handle delete related list
+                            }
+                          }}
+                          onAddRelatedList={() => {
+                            setShowCreateRelatedList(true);
+                          }}
                         />
                       )}
-
-                      {/* Validation Rules View */}
+                      
                       {activeSection === 'validation' && (
-                        <div className="space-y-4">
-                          <div className="flex justify-between items-center">
-                            <h3 className="text-lg font-bold text-gray-900">Validation Rules</h3>
-                            <button onClick={() => setShowCreateRule(true)} className="px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-green-600 hover:bg-green-700">
-                              New Rule
-                            </button>
-                          </div>
-                          {validationRules.map(rule => (
-                            <div key={rule.id} className="border p-4 rounded-lg bg-gray-50">
-                              <p><strong>Field:</strong> {rule.field}</p>
-                              <p><strong>Type:</strong> {rule.type}</p>
-                              <p><strong>Value:</strong> {rule.value}</p>
-                              <p><strong>Message:</strong> {rule.message}</p>
-                            </div>
-                          ))}
-                          {validationRules.length === 0 && (
-                            <p className="text-gray-500">No validation rules defined for this object yet.</p>
-                          )}
-                        </div>
-                      )}
-
-                      {/* Related Lists View */}
-                      {activeSection === 'related_lists' && (
-                        <div className="space-y-4">
-                          <div className="flex justify-between items-center">
-                            <h3 className="text-lg font-bold text-gray-900">Related Lists</h3>
-                            <button 
-                              onClick={() => setShowCreateRelatedList(true)} 
-                              className="px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-green-600 hover:bg-green-700"
-                            >
-                              New Related List
-                            </button>
-                          </div>
-                          
-                          <div className="space-y-4">
-                            {relatedLists.map((relatedList) => (
-                              <div key={relatedList.id} className="bg-white border border-gray-200 rounded-lg p-4">
-                                <div className="flex items-center justify-between">
-                                  <div className="flex items-center space-x-3">
-                                    <span className="text-xl">🔗</span>
-                                    <div>
-                                      <div className="flex items-center space-x-2">
-                                        <h4 className="text-sm font-medium text-gray-900">{relatedList.label}</h4>
-                                        <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-800">
-                                          {relatedList.child_table}
-                                        </span>
-                                      </div>
-                                      <p className="text-sm text-gray-500">
-                                        Foreign Key: {relatedList.foreign_key_field} | Section: {relatedList.section}
-                                      </p>
-                                      <p className="text-xs text-gray-400">
-                                        Display Columns: {relatedList.display_columns.join(', ')}
-                                      </p>
-                                    </div>
-                                  </div>
-                                  <div className="flex items-center space-x-2">
-                                    <button
-                                      onClick={() => {
-                                        setEditingRelatedList(relatedList);
-                                        setShowEditRelatedList(true);
-                                      }}
-                                      className="text-gray-400 hover:text-gray-500"
-                                      title="Edit related list"
-                                    >
-                                      <svg className="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" />
-                                      </svg>
-                                    </button>
-                                    <button
-                                      onClick={() => handleDeleteRelatedList(relatedList.id, relatedList.label)}
-                                      className="text-red-400 hover:text-red-500 disabled:text-gray-300"
-                                      title="Delete related list"
-                                      disabled={saving}
-                                    >
-                                      <svg className="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-                                      </svg>
-                                    </button>
-                                  </div>
-                                </div>
-                              </div>
-                            ))}
-                            {relatedLists.length === 0 && (
-                              <div className="text-center py-8">
-                                <div className="text-gray-400 text-6xl mb-4">🔗</div>
-                                <h3 className="text-lg font-medium text-gray-900 mb-2">No Related Lists</h3>
-                                <p className="text-gray-500 mb-4">
-                                  Create related lists to show connected records from other objects.
-                                </p>
-                                <button 
-                                  onClick={() => setShowCreateRelatedList(true)} 
-                                  className="px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-blue-600 hover:bg-blue-700"
-                                >
-                                  Create Your First Related List
-                                </button>
-                              </div>
-                            )}
-                          </div>
+                        <div className="text-center py-8 text-gray-500">
+                          Validation Rules management coming soon...
                         </div>
                       )}
                     </div>
-                  )}
+                  </div>
                 </div>
               </div>
             )}
           </div>
-        </div>
+        )}
       </div>
+
+      {/* Create Object Modal */}
+      {showCreateObject && (
+        <div className="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-50">
+          <div className="relative top-20 mx-auto p-5 border w-96 shadow-lg rounded-md bg-white">
+            <div className="mt-3">
+              <h3 className="text-lg font-medium text-gray-900 mb-4">Create New Object</h3>
+              <div className="space-y-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700">Object Label</label>
+                  <input
+                    type="text"
+                    value={newObject.label}
+                    onChange={(e) => setNewObject({ ...newObject, label: e.target.value })}
+                    className="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500 sm:text-sm"
+                    placeholder="e.g., Customer, Product"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700">API Name</label>
+                  <input
+                    type="text"
+                    value={newObject.api_name}
+                    onChange={(e) => setNewObject({ ...newObject, api_name: e.target.value })}
+                    className="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500 sm:text-sm"
+                    placeholder="e.g., customer, product"
+                  />
+                </div>
+                <div className="flex items-center">
+                  <input
+                    type="checkbox"
+                    checked={newObject.create_tab}
+                    onChange={(e) => setNewObject({ ...newObject, create_tab: e.target.checked })}
+                    className="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded"
+                  />
+                  <label className="ml-2 block text-sm text-gray-900">Create navigation tab</label>
+                </div>
+              </div>
+              <div className="flex justify-end space-x-3 mt-6">
+                <button
+                  onClick={() => setShowCreateObject(false)}
+                  className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-md hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={handleCreateObject}
+                  disabled={creatingObject}
+                  className="px-4 py-2 text-sm font-medium text-white bg-blue-600 border border-transparent rounded-md hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 disabled:opacity-50"
+                >
+                  {creatingObject ? 'Creating...' : 'Create Object'}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Create Field Modal */}
       {showCreateField && (
-        <div className="fixed z-10 inset-0 overflow-y-auto" aria-labelledby="modal-title" role="dialog" aria-modal="true">
-          <div className="flex items-center justify-center min-h-screen text-center sm:p-0">
-            <div className="fixed inset-0 bg-gray-500 bg-opacity-75 transition-opacity" aria-hidden="true"></div>
-            <span className="hidden sm:inline-block sm:align-middle sm:h-screen" aria-hidden="true">&#8203;</span>
-            <div className="inline-block align-bottom bg-white rounded-lg text-left overflow-hidden shadow-xl transform transition-all sm:my-8 sm:align-middle sm:max-w-lg sm:w-full">
-              <div className="bg-white px-4 pt-5 pb-4 sm:p-6 sm:pb-4">
-                <div className="sm:flex sm:items-start">
-                  <div className="mt-3 text-center sm:mt-0 sm:ml-4 sm:text-left w-full">
-                    <h3 className="text-lg leading-6 font-medium text-gray-900" id="modal-title">
-                      Create New Field
-                    </h3>
-                    <div className="mt-2 space-y-4">
-                      <div>
-                        <label htmlFor="field-display-label" className="block text-sm font-medium text-gray-700">Display Label</label>
-                        <input
-                          type="text"
-                          id="field-display-label"
-                          className="mt-1 focus:ring-blue-500 focus:border-blue-500 block w-full shadow-sm sm:text-sm border-gray-300 rounded-md"
-                          value={newField.display_label}
-                          onChange={(e) => {
-                            const displayLabel = e.target.value;
-                            setNewField({
-                              ...newField,
-                              display_label: displayLabel,
-                              api_name: generateApiName(displayLabel)
-                            });
-                          }}
-                        />
-                      </div>
-                      <div>
-                        <label htmlFor="field-api-name" className="block text-sm font-medium text-gray-700">API Name</label>
-                        <input
-                          type="text"
-                          id="field-api-name"
-                          className="mt-1 focus:ring-blue-500 focus:border-blue-500 block w-full shadow-sm sm:text-sm border-gray-300 rounded-md"
-                          value={newField.api_name}
-                          onChange={(e) => setNewField({ ...newField, api_name: e.target.value })}
-                        />
-                      </div>
-                      <div>
-                        <label htmlFor="field-type" className="block text-sm font-medium text-gray-700">Field Type</label>
-                        <select
-                          id="field-type"
-                          className="mt-1 block w-full pl-3 pr-10 py-2 text-base border-gray-300 focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm rounded-md"
-                          value={newField.field_type}
-                          onChange={(e) => setNewField({ ...newField, field_type: e.target.value })}
-                        >
-                          {dataTypes.map((type) => (
-                            <option key={type.value} value={type.value}>
-                              {type.label}
-                            </option>
-                          ))}
-                        </select>
-                      </div>
-                      <div className="flex items-center">
-                        <input
-                          id="is-required"
-                          name="is-required"
-                          type="checkbox"
-                          className="focus:ring-blue-500 h-4 w-4 text-blue-600 border-gray-300 rounded"
-                          checked={newField.is_required}
-                          onChange={(e) => setNewField({ ...newField, is_required: e.target.checked, is_nullable: !e.target.checked })}
-                        />
-                        <label htmlFor="is-required" className="ml-2 block text-sm text-gray-900">
-                          Required Field
-                        </label>
-                      </div>
+        <div className="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-50">
+          <div className="relative top-20 mx-auto p-5 border w-96 shadow-lg rounded-md bg-white">
+            <div className="mt-3">
+              <h3 className="text-lg leading-6 font-medium text-gray-900" id="modal-title">
+                Create New Field
+              </h3>
+              
+              {/* Error Message Display */}
+              {(message && message.includes('❌')) || fieldError ? (
+                <div className="mt-2 p-3 bg-red-50 border border-red-200 rounded-md">
+                  <div className="flex">
+                    <div className="flex-shrink-0">
+                      <svg className="h-5 w-5 text-red-400" viewBox="0 0 20 20" fill="currentColor">
+                        <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clipRule="evenodd" />
+                      </svg>
+                    </div>
+                    <div className="ml-3">
+                      <p className="text-sm text-red-700">
+                        {fieldError || (message && message.includes('❌') ? message : 'An error occurred')}
+                      </p>
                     </div>
                   </div>
                 </div>
+              ) : null}
+
+              <div className="mt-4 space-y-4">
+                <div>
+                  <label htmlFor="display-label" className="block text-sm font-medium text-gray-700">Display Label</label>
+                  <input
+                    type="text"
+                    id="display-label"
+                    className="mt-1 block w-full pl-3 pr-10 py-2 text-base border-gray-300 focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm rounded-md"
+                    value={newField.display_label}
+                    onChange={(e) => setNewField({ ...newField, display_label: e.target.value })}
+                    placeholder="e.g., Customer Name"
+                  />
+                </div>
+
+                <div>
+                  <label htmlFor="api-name" className="block text-sm font-medium text-gray-700">API Name</label>
+                  <input
+                    type="text"
+                    id="api-name"
+                    className="mt-1 block w-full pl-3 pr-10 py-2 text-base border-gray-300 focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm rounded-md"
+                    value={newField.api_name}
+                    onChange={(e) => setNewField({ ...newField, api_name: e.target.value })}
+                    placeholder="e.g., customer_name"
+                  />
+                </div>
+
+                <div>
+                  <label htmlFor="field-type" className="block text-sm font-medium text-gray-700">Field Type</label>
+                  <select
+                    id="field-type"
+                    className="mt-1 block w-full pl-3 pr-10 py-2 text-base border-gray-300 focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm rounded-md"
+                    value={newField.field_type}
+                    onChange={(e) => setNewField({ ...newField, field_type: e.target.value })}
+                  >
+                    {dataTypes.map((type) => (
+                      <option key={type.value} value={type.value}>
+                        {type.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                {/* Reference Object Selection - Only show when field type is 'reference' */}
+                {newField.field_type === 'reference' && (
+                  <div>
+                    <label htmlFor="reference-table" className="block text-sm font-medium text-gray-700">Reference Object</label>
+                    <select
+                      id="reference-table"
+                      className="mt-1 block w-full pl-3 pr-10 py-2 text-base border-gray-300 focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm rounded-md"
+                      value={newField.reference_table || ''}
+                      onChange={(e) => setNewField({ ...newField, reference_table: e.target.value })}
+                    >
+                      <option value="">Select an object</option>
+                      {objects.map((obj) => (
+                        <option key={obj.table_name} value={obj.table_name}>
+                          {obj.label}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                )}
+
+                <div className="flex items-center">
+                  <input
+                    type="checkbox"
+                    id="is-required"
+                    className="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded"
+                    checked={newField.is_required}
+                    onChange={(e) => setNewField({ ...newField, is_required: e.target.checked, is_nullable: !e.target.checked })}
+                  />
+                  <label htmlFor="is-required" className="ml-2 block text-sm text-gray-900">
+                    Required field
+                  </label>
+                </div>
               </div>
-              <div className="bg-gray-50 px-4 py-3 sm:px-6 sm:flex sm:flex-row-reverse">
+
+              <div className="flex justify-end space-x-3 mt-6">
                 <button
-                  type="button"
-                  className="w-full inline-flex justify-center rounded-md border border-transparent shadow-sm px-4 py-2 bg-green-600 text-base font-medium text-white hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-green-500 sm:ml-3 sm:w-auto sm:text-sm"
-                  onClick={handleCreateField}
-                  disabled={creatingField}
-                >
-                  {creatingField ? 'Creating...' : 'Create New Field'}
-                </button>
-                <button
-                  type="button"
-                  className="mt-3 w-full inline-flex justify-center rounded-md border border-gray-300 shadow-sm px-4 py-2 bg-white text-base font-medium text-gray-700 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 sm:mt-0 sm:ml-3 sm:w-auto sm:text-sm"
                   onClick={() => {
                     setShowCreateField(false);
                     resetNewField();
                     setMessage('');
+                    setFieldError(null);
                   }}
+                  className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-md hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={handleCreateField}
                   disabled={creatingField}
+                  className="px-4 py-2 text-sm font-medium text-white bg-blue-600 border border-transparent rounded-md hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 disabled:opacity-50"
                 >
-                  Cancel
+                  {creatingField ? 'Creating...' : 'Create Field'}
                 </button>
               </div>
             </div>
@@ -1998,194 +1349,209 @@ function SettingsManagerContent({ initialActiveMainTab = 'home' }: { initialActi
         </div>
       )}
 
-      {/* Create Object Modal */}
-      {showCreateObject && (
-        <div className="fixed z-10 inset-0 overflow-y-auto" aria-labelledby="modal-title" role="dialog" aria-modal="true">
-          <div className="flex items-center justify-center min-h-screen text-center sm:p-0">
-            <div className="fixed inset-0 bg-gray-500 bg-opacity-75 transition-opacity" aria-hidden="true"></div>
-            <span className="hidden sm:inline-block sm:align-middle sm:h-screen" aria-hidden="true">&#8203;</span>
-            <div className="inline-block align-bottom bg-white rounded-lg text-left overflow-hidden shadow-xl transform transition-all sm:my-8 sm:align-middle sm:max-w-lg sm:w-full">
-              <div className="bg-white px-4 pt-5 pb-4 sm:p-6 sm:pb-4">
-                <div className="sm:flex sm:items-start">
-                  <div className="mt-3 text-center sm:mt-0 sm:ml-4 sm:text-left w-full">
-                    <h3 className="text-lg leading-6 font-medium text-gray-900" id="modal-title">
-                      Create New Object
-                    </h3>
-                    <div className="mt-4 space-y-4">
-                      <div>
-                        <label htmlFor="object-label" className="block text-sm font-medium text-gray-700">Object Label</label>
-                        <input
-                          type="text"
-                          id="object-label"
-                          className="mt-1 focus:ring-blue-500 focus:border-blue-500 block w-full shadow-sm sm:text-sm border-gray-300 rounded-md"
-                          value={newObject.label}
-                          onChange={(e) => {
-                            const label = e.target.value;
-                            setNewObject({
-                              ...newObject,
-                              label,
-                              api_name: generateApiName(label)
-                            });
-                          }}
-                          placeholder="Enter object label (e.g., Products)"
-                        />
-                      </div>
-                      <div>
-                        <label htmlFor="object-api-name" className="block text-sm font-medium text-gray-700">API Name</label>
-                        <input
-                          type="text"
-                          id="object-api-name"
-                          className="mt-1 focus:ring-blue-500 focus:border-blue-500 block w-full shadow-sm sm:text-sm border-gray-300 rounded-md"
-                          value={newObject.api_name}
-                          onChange={(e) => setNewObject({ ...newObject, api_name: e.target.value })}
-                          placeholder="Enter API name (e.g., products)"
-                        />
-                        <p className="mt-1 text-sm text-gray-500">
-                          API name must start with a letter and contain only letters, numbers, and underscores.
-                        </p>
-                      </div>
-                      <div className="flex items-center">
-                        <input
-                          type="checkbox"
-                          id="create-tab"
-                          className="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded"
-                          checked={newObject.create_tab}
-                          onChange={(e) => setNewObject({ ...newObject, create_tab: e.target.checked })}
-                        />
-                        <label htmlFor="create-tab" className="ml-2 block text-sm text-gray-900">
-                          Create Navigation Tab
-                        </label>
-                      </div>
-                      <div className="flex items-center">
-                        <input
-                          type="checkbox"
-                          id="auto-number"
-                          className="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded"
-                          checked={newObject.auto_number}
-                          onChange={(e) => setNewObject({ ...newObject, auto_number: e.target.checked })}
-                        />
-                        <label htmlFor="auto-number" className="ml-2 block text-sm text-gray-900">
-                          Enable Auto-numbering for Records
-                        </label>
-                      </div>
+      {/* Edit Object Label Modal */}
+      {isEditingObject && (
+        <div className="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-50">
+          <div className="relative top-20 mx-auto p-5 border w-96 shadow-lg rounded-md bg-white">
+            <div className="mt-3">
+              <h3 className="text-lg font-medium text-gray-900 mb-4">Edit Object Label</h3>
+              <div>
+                <label className="block text-sm font-medium text-gray-700">Object Label</label>
+                <input
+                  type="text"
+                  value={editingObjectLabel}
+                  onChange={(e) => setEditingObjectLabel(e.target.value)}
+                  className="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500 sm:text-sm"
+                />
+              </div>
+              <div className="flex justify-end space-x-3 mt-6">
+                <button
+                  onClick={() => setIsEditingObject(false)}
+                  className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-md hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={handleSaveObjectLabel}
+                  disabled={saving}
+                  className="px-4 py-2 text-sm font-medium text-white bg-blue-600 border border-transparent rounded-md hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 disabled:opacity-50"
+                >
+                  {saving ? 'Saving...' : 'Save'}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Edit Field Modal */}
+      {showEditFieldModal && editingField && (
+        <div className="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-50">
+          <div className="relative top-20 mx-auto p-5 border w-96 shadow-lg rounded-md bg-white">
+            <div className="mt-3">
+              <h3 className="text-lg leading-6 font-medium text-gray-900" id="modal-title">
+                Edit Field: {editingField.display_label}
+              </h3>
+              
+              {/* Error Message Display */}
+              {fieldError && (
+                <div className="mt-2 p-3 bg-red-50 border border-red-200 rounded-md">
+                  <div className="flex">
+                    <div className="flex-shrink-0">
+                      <svg className="h-5 w-5 text-red-400" viewBox="0 0 20 20" fill="currentColor">
+                        <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clipRule="evenodd" />
+                      </svg>
+                    </div>
+                    <div className="ml-3">
+                      <p className="text-sm text-red-700">{fieldError}</p>
                     </div>
                   </div>
                 </div>
-              </div>
-              <div className="bg-gray-50 px-4 py-3 sm:px-6 sm:flex sm:flex-row-reverse">
-                <button
-                  type="button"
-                  className="w-full inline-flex justify-center rounded-md border border-transparent shadow-sm px-4 py-2 bg-blue-600 text-base font-medium text-white hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 sm:ml-3 sm:w-auto sm:text-sm"
-                  onClick={handleCreateObject}
-                  disabled={creatingObject}
-                >
-                  {creatingObject ? 'Creating...' : 'Create Object'}
-                </button>
-                <button
-                  type="button"
-                  className="mt-3 w-full inline-flex justify-center rounded-md border border-gray-300 shadow-sm px-4 py-2 bg-white text-base font-medium text-gray-700 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 sm:mt-0 sm:ml-3 sm:w-auto sm:text-sm"
-                  onClick={() => {
-                    setShowCreateObject(false);
-                    setNewObject({
-                      label: '',
-                      api_name: '',
-                      create_tab: true,
-                      auto_number: true
-                    });
-                  }}
-                >
-                  Cancel
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
+              )}
 
-      {/* Create Related List Modal */}
-      {showCreateRelatedList && (
-        <div className="fixed z-10 inset-0 overflow-y-auto" aria-labelledby="modal-title" role="dialog" aria-modal="true">
-          <div className="flex items-center justify-center min-h-screen text-center sm:p-0">
-            <div className="fixed inset-0 bg-gray-500 bg-opacity-75 transition-opacity" aria-hidden="true"></div>
-            <span className="hidden sm:inline-block sm:align-middle sm:h-screen" aria-hidden="true">&#8203;</span>
-            <div className="inline-block align-bottom bg-white rounded-lg text-left overflow-hidden shadow-xl transform transition-all sm:my-8 sm:align-middle sm:max-w-lg sm:w-full">
-              <div className="bg-white px-4 pt-5 pb-4 sm:p-6 sm:pb-4">
-                <div className="sm:flex sm:items-start">
-                  <div className="mt-3 text-center sm:mt-0 sm:ml-4 sm:text-left w-full">
-                    <h3 className="text-lg leading-6 font-medium text-gray-900" id="modal-title">
-                      Create New Related List
-                    </h3>
-                    <div className="mt-4 space-y-4">
-                      <div>
-                        <label htmlFor="related-list-label" className="block text-sm font-medium text-gray-700">Display Label</label>
-                        <input
-                          type="text"
-                          id="related-list-label"
-                          className="mt-1 focus:ring-blue-500 focus:border-blue-500 block w-full shadow-sm sm:text-sm border-gray-300 rounded-md"
-                          value={newRelatedList.label}
-                          onChange={(e) => setNewRelatedList({ ...newRelatedList, label: e.target.value })}
-                          placeholder="e.g., Related Contacts"
-                        />
-                      </div>
-                      <div>
-                        <label htmlFor="child-table" className="block text-sm font-medium text-gray-700">Child Object</label>
-                        <select
-                          id="child-table"
-                          className="mt-1 block w-full pl-3 pr-10 py-2 text-base border-gray-300 focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm rounded-md"
-                          value={newRelatedList.child_table}
-                          onChange={(e) => setNewRelatedList({ ...newRelatedList, child_table: e.target.value })}
-                        >
-                          <option value="">Select a child object</option>
-                          {objects.map((obj) => (
-                            <option key={obj.table_name} value={obj.table_name}>
-                              {obj.label || obj.table_name}
-                            </option>
-                          ))}
-                        </select>
-                      </div>
-                      <div>
-                        <label htmlFor="foreign-key-field" className="block text-sm font-medium text-gray-700">Foreign Key Field</label>
-                        <input
-                          type="text"
-                          id="foreign-key-field"
-                          className="mt-1 focus:ring-blue-500 focus:border-blue-500 block w-full shadow-sm sm:text-sm border-gray-300 rounded-md"
-                          value={newRelatedList.foreign_key_field}
-                          onChange={(e) => setNewRelatedList({ ...newRelatedList, foreign_key_field: e.target.value })}
-                          placeholder="e.g., client_id"
-                        />
-                        <p className="mt-1 text-sm text-gray-500">
-                          The field in the child object that references this object's ID.
-                        </p>
-                      </div>
-                    </div>
+              <div className="mt-4 space-y-4">
+                <div>
+                  <label htmlFor="edit-display-label" className="block text-sm font-medium text-gray-700">Display Label</label>
+                  <input
+                    type="text"
+                    id="edit-display-label"
+                    className="mt-1 block w-full pl-3 pr-10 py-2 text-base border-gray-300 focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm rounded-md"
+                    value={editingField.display_label}
+                    onChange={(e) => setEditingField({ ...editingField, display_label: e.target.value })}
+                    placeholder="e.g., Customer Name"
+                  />
+                </div>
+
+                <div>
+                  <label htmlFor="edit-api-name" className="block text-sm font-medium text-gray-700">API Name</label>
+                  <input
+                    type="text"
+                    id="edit-api-name"
+                    className="mt-1 block w-full pl-3 pr-10 py-2 text-base border-gray-300 focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm rounded-md"
+                    value={editingField.api_name}
+                    onChange={(e) => setEditingField({ ...editingField, api_name: e.target.value })}
+                    placeholder="e.g., customer_name"
+                    disabled={editingField.is_system_field}
+                  />
+                  {editingField.is_system_field && (
+                    <p className="mt-1 text-sm text-gray-500">System fields cannot be renamed</p>
+                  )}
+                </div>
+
+                <div>
+                  <label htmlFor="edit-field-type" className="block text-sm font-medium text-gray-700">Field Type</label>
+                  <select
+                    id="edit-field-type"
+                    className="mt-1 block w-full pl-3 pr-10 py-2 text-base border-gray-300 focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm rounded-md"
+                    value={editingField.field_type}
+                    onChange={(e) => setEditingField({ ...editingField, field_type: e.target.value })}
+                    disabled={editingField.is_system_field}
+                  >
+                    {dataTypes.map((type) => (
+                      <option key={type.value} value={type.value}>
+                        {type.label}
+                      </option>
+                    ))}
+                  </select>
+                  {editingField.is_system_field && (
+                    <p className="mt-1 text-sm text-gray-500">System field types cannot be changed</p>
+                  )}
+                </div>
+
+                {/* Reference Object Selection - Only show when field type is 'reference' */}
+                {editingField.field_type === 'reference' && (
+                  <div>
+                    <label htmlFor="edit-reference-table" className="block text-sm font-medium text-gray-700">Reference Object</label>
+                    <select
+                      id="edit-reference-table"
+                      className="mt-1 block w-full pl-3 pr-10 py-2 text-base border-gray-300 focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm rounded-md"
+                      value={editingField.reference_table || ''}
+                      onChange={(e) => setEditingField({ ...editingField, reference_table: e.target.value })}
+                    >
+                      <option value="">Select an object</option>
+                      {objects.map((obj) => (
+                        <option key={obj.table_name} value={obj.table_name}>
+                          {obj.label}
+                        </option>
+                      ))}
+                    </select>
                   </div>
+                )}
+
+                <div className="flex items-center">
+                  <input
+                    type="checkbox"
+                    id="edit-is-required"
+                    className="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded"
+                    checked={editingField.is_required}
+                    onChange={(e) => setEditingField({ ...editingField, is_required: e.target.checked, is_nullable: !e.target.checked })}
+                  />
+                  <label htmlFor="edit-is-required" className="ml-2 block text-sm text-gray-900">
+                    Required field
+                  </label>
+                </div>
+
+                <div className="flex items-center">
+                  <input
+                    type="checkbox"
+                    id="edit-is-visible"
+                    className="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded"
+                    checked={editingField.is_visible}
+                    onChange={(e) => setEditingField({ ...editingField, is_visible: e.target.checked })}
+                  />
+                  <label htmlFor="edit-is-visible" className="ml-2 block text-sm text-gray-900">
+                    Visible in interface
+                  </label>
                 </div>
               </div>
-              <div className="bg-gray-50 px-4 py-3 sm:px-6 sm:flex sm:flex-row-reverse">
+
+              <div className="flex justify-end space-x-3 mt-6">
                 <button
-                  type="button"
-                  className="w-full inline-flex justify-center rounded-md border border-transparent shadow-sm px-4 py-2 bg-green-600 text-base font-medium text-white hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-green-500 sm:ml-3 sm:w-auto sm:text-sm"
-                  onClick={handleCreateRelatedList}
-                  disabled={creatingRelatedList}
-                >
-                  {creatingRelatedList ? 'Creating...' : 'Create Related List'}
-                </button>
-                <button
-                  type="button"
-                  className="mt-3 w-full inline-flex justify-center rounded-md border border-gray-300 shadow-sm px-4 py-2 bg-white text-base font-medium text-gray-700 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 sm:mt-0 sm:ml-3 sm:w-auto sm:text-sm"
                   onClick={() => {
-                    setShowCreateRelatedList(false);
-                    setNewRelatedList({
-                      child_table: '',
-                      foreign_key_field: '',
-                      label: '',
-                      display_columns: ['id', 'name'],
-                      section: 'details'
-                    });
+                    setShowEditFieldModal(false);
+                    setEditingField(null);
+                    setFieldError(null);
                   }}
-                  disabled={creatingRelatedList}
+                  className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-md hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
                 >
                   Cancel
+                </button>
+                <button
+                  onClick={async () => {
+                    try {
+                      setSaving(true);
+                      setFieldError(null);
+                      
+                      const { error } = await supabase
+                        .from('field_metadata')
+                        .update({
+                          display_label: editingField.display_label,
+                          api_name: editingField.api_name,
+                          field_type: editingField.field_type,
+                          is_required: editingField.is_required,
+                          is_nullable: !editingField.is_required,
+                          is_visible: editingField.is_visible,
+                          reference_table: editingField.field_type === 'reference' ? editingField.reference_table : null,
+                        })
+                        .eq('id', editingField.id);
+
+                      if (error) throw error;
+
+                      setMessage('✅ Field updated successfully!');
+                      setShowEditFieldModal(false);
+                      setEditingField(null);
+                      fetchFieldMetadata(selectedObject!);
+                    } catch (err: any) {
+                      logError('updating field', err, { fieldData: editingField });
+                      setFieldError(`❌ Error updating field: ${formatErrorMessage(err)}`);
+                    } finally {
+                      setSaving(false);
+                    }
+                  }}
+                  disabled={saving}
+                  className="px-4 py-2 text-sm font-medium text-white bg-blue-600 border border-transparent rounded-md hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 disabled:opacity-50"
+                >
+                  {saving ? 'Saving...' : 'Save Changes'}
                 </button>
               </div>
             </div>
@@ -2193,12 +1559,37 @@ function SettingsManagerContent({ initialActiveMainTab = 'home' }: { initialActi
         </div>
       )}
 
+      {/* Toast Message */}
       {message && (
-        <div className={`fixed bottom-4 right-4 p-4 rounded-md shadow-lg ${message.includes('❌') ? 'bg-red-50 text-red-700' : 'bg-green-50 text-green-700'}`}>
-          {message}
+        <div className={`fixed top-4 right-4 p-4 rounded-md shadow-lg z-50 max-w-md ${message.includes('❌') ? 'bg-red-50 text-red-700 border border-red-200' : 'bg-green-50 text-green-700 border border-green-200'}`}>
+          <div className="flex items-start">
+            <div className="flex-shrink-0">
+              {message.includes('❌') ? (
+                <svg className="h-5 w-5 text-red-400" viewBox="0 0 20 20" fill="currentColor">
+                  <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clipRule="evenodd" />
+                </svg>
+              ) : (
+                <svg className="h-5 w-5 text-green-400" viewBox="0 0 20 20" fill="currentColor">
+                  <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
+                </svg>
+              )}
+            </div>
+            <div className="ml-3">
+              <p className="text-sm font-medium">{message}</p>
+            </div>
+            <div className="ml-auto pl-3">
+              <button
+                onClick={() => setMessage('')}
+                className="inline-flex text-gray-400 hover:text-gray-600"
+              >
+                <svg className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
+                  <path fillRule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" clipRule="evenodd" />
+                </svg>
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </div>
   );
 }
-

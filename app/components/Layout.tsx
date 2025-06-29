@@ -2,162 +2,104 @@
 
 import { useState, useEffect } from 'react';
 import { usePathname, useRouter } from 'next/navigation';
-import TabNavigation from './TabNavigation';
-import ChannelPartnerList from './ChannelPartnerList';
-import BillingList from './BillingList';
-import UserManagement from './UserManagement';
-import SettingsManager from './SettingsManager';
+import { supabase } from '../utils/supabaseClient';
 import { useAuth } from './AuthProvider';
-import { signOut } from '../lib/auth';
 
 interface LayoutProps {
   children: React.ReactNode;
 }
 
-const tabs = [
-  { id: 'clients', label: 'Clients', icon: '👥' },
-  { id: 'channel-partners', label: 'Channel Partners', icon: '🤝' },
-  { id: 'billing', label: 'Billing', icon: '💰' },
-  { id: 'users', label: 'Users', icon: '👤' },
-  { id: 'dashboard', label: 'Dashboard', icon: '📊' },
-  { id: 'reports', label: 'Reports', icon: '📈' },
-  { id: 'settings', label: 'Settings', icon: '⚙️' },
-];
+interface TabEntry {
+  id: string;
+  label: string;
+}
 
 export default function Layout({ children }: LayoutProps) {
-  const [activeTab, setActiveTab] = useState('clients');
-  const { user, refreshUser, impersonatedUserName, setImpersonatedUserName } = useAuth();
+  const [tabs, setTabs] = useState<TabEntry[]>([]);
+  const [activeTab, setActiveTab] = useState('');
+  const { user, refreshUser } = useAuth();
   const pathname = usePathname();
   const router = useRouter();
 
-  // Update active tab based on current pathname
+  // Load tabs from Supabase
   useEffect(() => {
-    if (pathname.startsWith('/clients')) {
-      setActiveTab('clients');
-    } else if (pathname.startsWith('/channel-partners')) {
-      setActiveTab('channel-partners');
-    } else if (pathname.startsWith('/billing')) {
-      setActiveTab('billing');
-    } else if (pathname.startsWith('/users')) {
-      setActiveTab('users');
-    } else if (pathname.startsWith('/dashboard')) {
-      setActiveTab('dashboard');
-    } else if (pathname.startsWith('/reports')) {
-      setActiveTab('reports');
-    } else if (pathname.startsWith('/settings')) {
-      setActiveTab('settings');
-    }
-  }, [pathname]);
+    const fetchTabs = async () => {
+      const { data, error } = await supabase
+        .from('tabs')
+        .select('api_name, name, is_visible, display_order')
+        .eq('is_visible', true)
+        .order('display_order');
 
-  const handleSignOut = async () => {
-    await signOut();
-    await refreshUser();
-  };
+      console.log('Tabs data:', data, 'Error:', error);
+
+      if (!error && data) {
+        const mappedTabs = (data || []).map((tab: any) => ({
+          id: tab.api_name,
+          label: tab.name
+        }));
+        setTabs(mappedTabs);
+      }
+    };
+
+    fetchTabs();
+  }, []);
+
+  // Set active tab based on pathname
+  useEffect(() => {
+    const match = tabs.find(tab => pathname.startsWith(`/${tab.id}`));
+    if (match) {
+      setActiveTab(match.id);
+    }
+  }, [pathname, tabs]);
 
   const handleTabChange = (tabId: string) => {
     setActiveTab(tabId);
-    // Navigate to the appropriate route
-    if (tabId === 'clients') {
-      router.push('/clients');
-    } else if (tabId === 'channel-partners') {
-      router.push('/channel-partners');
-    } else if (tabId === 'billing') {
-      router.push('/billing');
-    } else if (tabId === 'users') {
-      router.push('/users');
-    } else if (tabId === 'dashboard') {
-      router.push('/dashboard');
-    } else if (tabId === 'reports') {
-      router.push('/reports');
-    } else if (tabId === 'settings') {
-      router.push('/settings');
-    }
+    router.push(`/${tabId}`);
   };
 
-  // Filter tabs based on user role
+  // Role-based filtering (optional, you can adjust this logic)
   const getVisibleTabs = () => {
-    if (!user?.user) return tabs.filter(tab => ['clients', 'dashboard'].includes(tab.id));
-    
+    if (!user?.user) return tabs;
+
     const userRole = user.user.role;
-    
     if (userRole === 'viewer') {
-      return tabs.filter(tab => ['clients', 'channel-partners', 'billing', 'dashboard', 'reports'].includes(tab.id));
+      return tabs.filter(tab =>
+        ['clients', 'channel-partners', 'billing', 'dashboard', 'reports'].includes(tab.id)
+      );
     }
-    
     if (userRole === 'employee') {
-      return tabs.filter(tab => !['users', 'settings'].includes(tab.id));
+      return tabs.filter(tab =>
+        !['users', 'settings'].includes(tab.id)
+      );
     }
-    
-    // Manager and Admin can see all tabs
-    return tabs;
+    return tabs; // manager/admin
   };
 
   const visibleTabs = getVisibleTabs();
 
   return (
     <div className="min-h-screen bg-gray-50">
-      {/* Header */}
+      {/* Top Horizontal Navigation */}
       <header className="bg-white shadow-sm border-b border-gray-200">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="flex justify-between items-center h-16">
-            <div className="flex items-center">
-              <h1 className="text-xl font-semibold text-gray-900">Client Management System</h1>
-            </div>
-            <div className="flex items-center space-x-4">
-              {user?.user && (
-                <>
-                  {impersonatedUserName && (
-                    <div className="text-sm text-yellow-700 bg-yellow-100 px-3 py-1 rounded-full mr-4 flex items-center gap-2">
-                      <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-4 h-4">
-                        <path strokeLinecap="round" strokeLinejoin="round" d="M17.982 18.725A7.488 7.488 0 0 0 12 15.75a7.488 7.488 0 0 0-5.982 2.975m11.963 0a9 9 0 1 0-11.963 0m11.963 0A8.966 8.966 0 0 1 12 21a8.966 8.966 0 0 1-5.982-2.275M15 9.75a3 3 0 1 1-6 0 3 3 0 0 1 6 0Z" />
-                      </svg>
-                      Logged in as <span className="font-semibold">{impersonatedUserName}</span>
-                      <button
-                        onClick={() => {
-                          setImpersonatedUserName(null);
-                          localStorage.removeItem('impersonatedUserName');
-                          window.location.href = '/';
-                        }}
-                        className="ml-2 text-yellow-800 hover:text-yellow-900 focus:outline-none"
-                      >
-                        (Exit Impersonation)
-                      </button>
-                    </div>
-                  )}
-                  <div className="flex items-center space-x-2">
-                    <div className="w-8 h-8 bg-blue-600 rounded-full flex items-center justify-center">
-                      <span className="text-white text-sm font-medium">
-                        {user.user.full_name.charAt(0).toUpperCase()}
-                      </span>
-                    </div>
-                    <div className="text-sm">
-                      <div className="text-gray-900">{user.user.full_name}</div>
-                      <div className="text-gray-500 capitalize">{user.user.role}</div>
-                    </div>
-                  </div>
-                  <button
-                    onClick={handleSignOut}
-                    className="text-sm text-gray-500 hover:text-gray-700 px-3 py-2 rounded-md hover:bg-gray-100 transition-colors"
-                  >
-                    Sign out
-                  </button>
-                </>
-              )}
-            </div>
-          </div>
-        </div>
+        <nav className="flex space-x-4 px-6 py-4">
+          {visibleTabs.map(tab => (
+            <button
+              key={tab.id}
+              onClick={() => handleTabChange(tab.id)}
+              className={`px-3 py-2 text-sm font-medium border-b-2 ${
+                activeTab === tab.id
+                  ? 'border-blue-600 text-blue-600'
+                  : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+              }`}
+            >
+              {tab.label}
+            </button>
+          ))}
+        </nav>
       </header>
 
-      {/* Tab Navigation */}
-      <TabNavigation 
-        tabs={visibleTabs} 
-        activeTab={activeTab} 
-        onTabChange={handleTabChange} 
-      />
-
-      {/* Main Content */}
-      <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-        {/* Always render children - this will be the page-specific content */}
+      {/* Main Page Content */}
+      <main className="p-6">
         {children}
       </main>
     </div>
